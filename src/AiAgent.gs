@@ -248,6 +248,7 @@ function sanitizeAiText_(t) {
 
 /** 화면에서 부르는 공개 함수 */
 function aiChat(req) {
+  ensureRealSetup_();
   return AiAgent.chat(req);
 }
 

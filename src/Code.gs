@@ -32,10 +32,12 @@ function include(name) {
 
 /** 사용자 화면: 해당 날짜의 12별자리 운세 (생략하면 오늘) */
 function getHoroscopes(dateStr) {
+  ensureRealSetup_();          // 처음 한 번: 실제 운세 모드로 자동 설정 (Setup.gs)
   return HoroscopeService.getByDate(dateStr);
 }
 
 /** 사용자 화면: 달력에서 운세를 볼 수 있는 날짜 ('yyyy-MM') */
 function getAvailableDates(month) {
+  ensureRealSetup_();
   return HoroscopeService.availableDates(month);
 }

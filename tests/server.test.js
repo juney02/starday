@@ -422,6 +422,14 @@ function xFeed(e, date, scenario) {
   ok(su.status === 'PUBLISHED' && su.isMock === false && su.items.length === 12, '처음 설정 직후: 실제 운세가 바로 보임(가상 데이터 아님)');
   e.user.act = 'visitor@x.com'; ok(/소유자/.test((() => { try { e.run('setupRealApp()'); } catch (er) { return er.message; } })() || ''), '처음 설정은 소유자만');
 
+  // 9-4c2. 메뉴를 안 눌러도: 앱을 처음 열면 자동으로 실제 운세 모드 (한 번만)
+  e = makeEnv(); delete e.props.SETUP_REAL; site(e, SAMPLE('20261015')); e.setNow('2026-10-15 10:00');
+  const au = e.call(`getHoroscopes()`);
+  ok(au.status === 'PUBLISHED' && au.isMock === false && au.items.length === 12, '처음 열면 자동 설정 → 테스트 운세가 아니라 실제 운세');
+  ok(e.props.SETUP_REAL === '1' && e.props.MODE === 'PRODUCTION' && e.triggers.length === 1, '자동 설정 기록·트리거');
+  e.run(`Settings.set('MODE','TEST')`); e.call(`getHoroscopes()`);
+  eq(e.props.MODE, 'TEST', '자동 설정은 한 번만 (나중에 관리자가 바꾼 모드는 그대로)');
+
   // 9-4d. 앱을 열 때 바로 확인(ON_DEMAND): 트리거를 기다리지 않음
   const prodEnv = (json) => { const x = makeEnv(); site(x, json); x.run(`Settings.set('MODE','PRODUCTION'); Settings.set('AUTO_PUBLISH','true'); Source.patch({authorization_status:'APPROVED'})`); return x; };
   e = prodEnv(SAMPLE('20261015')); e.setNow('2026-10-15 07:40');

@@ -1,7 +1,8 @@
 const fs = require('fs'), path = require('path'), vm = require('vm'), crypto = require('crypto');
 const SRC = path.join(__dirname, '..', 'src');
 function makeEnv() {
-  const env = { now: Date.UTC(2026, 9, 15, 0, 0), props: {}, cache: {}, sheets: {}, triggers: [], user: { eff: 'owner@x.com', act: 'owner@x.com' }, fetchHandler: null, sleeps: 0, fetchLog: [] };
+  // SETUP_REAL=1: 기존 테스트는 TEST 모드를 전제로 하므로 "앱을 처음 열 때 자동 실제 모드 설정"을 건너뛴다 (자동 설정은 따로 시험)
+  const env = { now: Date.UTC(2026, 9, 15, 0, 0), props: { SETUP_REAL: '1' }, cache: {}, sheets: {}, triggers: [], user: { eff: 'owner@x.com', act: 'owner@x.com' }, fetchHandler: null, sleeps: 0, fetchLog: [] };
   const FakeDate = class extends Date { constructor(...a) { if (a.length === 0) super(env.now); else super(...a); } static now() { return env.now; } };
   const pad = n => String(n).padStart(2, '0');
   const sheet = (name) => {

@@ -25,12 +25,26 @@ function onOpen() {
   } catch (e) { /* 시트 화면이 아닌 곳(웹앱 등)에서 불리면 무시 */ }
 }
 
-/** 편집기 또는 시트 메뉴에서 실행: 실제 운세 모드로 한 번에 설정 */
-function setupRealApp() {
-  requireOwner_();
+/**
+ * 앱(웹앱)이 데이터를 처음 요청할 때 한 번만: 메뉴를 누르지 않았어도 실제 운세 모드로 맞춘다.
+ * SETUP_REAL=1 이 기록되면 다시 하지 않는다. (그 뒤 관리자가 TEST로 바꾸면 그 선택을 존중한다)
+ */
+function ensureRealSetup_() {
+  if (Settings.get('SETUP_REAL', '') === '1') return;
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return;
+  try {
+    if (Settings.get('SETUP_REAL', '') === '1') return;
+    applyRealSettings_();
+    try { if (!triggersInstalled_()) installTriggers_(); } catch (e) { /* 트리거를 못 만들어도 "앱을 열 때 바로 확인"으로 동작 */ }
+    Settings.set('SETUP_REAL', '1');
+  } finally { lock.releaseLock(); }
+}
+
+/** 실제 운세 모드 설정값 (메뉴 1번과 자동 설정이 함께 쓴다) */
+function applyRealSettings_() {
   Object.keys(TABLES).forEach(function (n) { Db.sheet(n); });
   Source.get();
-
   Settings.set('MODE', 'PRODUCTION');                 // 가상(TEST) → 실제 운세
   Settings.set('PROD_SOURCE', 'SITE');                // 공식 사이트 horoscope.json (X API 비용 없음)
   Settings.set('AUTO_PUBLISH', 'true');               // 12별자리·순위·날짜 검증을 통과하면 바로 화면에 표시
@@ -41,8 +55,15 @@ function setupRealApp() {
     notes: '개인 열람 전용(웹앱 접근: 나만). APPROVED = 내 화면에 표시한다는 뜻. 공개 배포 전에는 ABC TV 이용 허락 필요.',
   });
   if (!Settings.has('ADMIN_TOKEN')) Settings.set('ADMIN_TOKEN', (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, ''));
-  installTriggers_();
   HoroscopeRepo.invalidate(nowParts_().date);
+}
+
+/** 편집기 또는 시트 메뉴에서 실행: 실제 운세 모드로 한 번에 설정 */
+function setupRealApp() {
+  requireOwner_();
+  applyRealSettings_();
+  Settings.set('SETUP_REAL', '1');
+  installTriggers_();
 
   const r = Importer.run('SETUP', {});
   const lines = [
