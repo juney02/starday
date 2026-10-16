@@ -1,0 +1,207 @@
+<script>
+/* ===== 공통 코드: 별자리 정보 · 저장소 · 서버 통신 · 도우미 · 아이콘 · 바텀시트 ===== */
+
+// 12별자리. key는 서버(ZODIAC_KEYS)와 같아야 한다. ︎는 이모지 대신 글자 모양으로 보이게 한다.
+// rg: 날짜 범위(아래 SIGN_STARTS와 같은 기준)
+const ZODIACS = [
+  { key: 'aries',       ko: '양자리',     sym: '♈︎', rg: '3.21–4.19' },
+  { key: 'taurus',      ko: '황소자리',   sym: '♉︎', rg: '4.20–5.20' },
+  { key: 'gemini',      ko: '쌍둥이자리', sym: '♊︎', rg: '5.21–6.21' },
+  { key: 'cancer',      ko: '게자리',     sym: '♋︎', rg: '6.22–7.22' },
+  { key: 'leo',         ko: '사자자리',   sym: '♌︎', rg: '7.23–8.22' },
+  { key: 'virgo',       ko: '처녀자리',   sym: '♍︎', rg: '8.23–9.22' },
+  { key: 'libra',       ko: '천칭자리',   sym: '♎︎', rg: '9.23–10.23' },
+  { key: 'scorpio',     ko: '전갈자리',   sym: '♏︎', rg: '10.24–11.22' },
+  { key: 'sagittarius', ko: '사수자리',   sym: '♐︎', rg: '11.23–12.21' },
+  { key: 'capricorn',   ko: '염소자리',   sym: '♑︎', rg: '12.22–1.19' },
+  { key: 'aquarius',    ko: '물병자리',   sym: '♒︎', rg: '1.20–2.18' },
+  { key: 'pisces',      ko: '물고기자리', sym: '♓︎', rg: '2.19–3.20' },
+];
+const zodiacByKey = key => ZODIACS.find(z => z.key === key) || null;
+
+// 일반적인 서양 별자리 날짜 기준: 월일(MMDD) 시작값
+const SIGN_STARTS = [
+  [120, 'aquarius'], [219, 'pisces'], [321, 'aries'], [420, 'taurus'], [521, 'gemini'], [622, 'cancer'],
+  [723, 'leo'], [823, 'virgo'], [923, 'libra'], [1024, 'scorpio'], [1123, 'sagittarius'],
+];
+function signFromBirthDate(dateStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr || '');
+  if (!m) return null;
+  const md = Number(m[2]) * 100 + Number(m[3]);
+  if (md >= 1222 || md <= 119) return 'capricorn';
+  let found = 'capricorn';
+  SIGN_STARTS.forEach(([start, key]) => { if (md >= start) found = key; });
+  return found;
+}
+
+const OFFICIAL_SITE_URL = 'https://www.asahi.co.jp/ohaasa/';
+const OFFICIAL_X_URL = 'https://x.com/Hi_Ohaasa';
+const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
+
+/* 저장소: 브라우저 localStorage. 막혀 있으면(시크릿 모드 등) 메모리에만 저장한다 */
+const Store = (function () {
+  const KEY = 'byeolharu.profile.v1';
+  let memory = null;
+  return {
+    load() {
+      try { const raw = localStorage.getItem(KEY); if (raw) return JSON.parse(raw); } catch (e) { /* 무시 */ }
+      return memory;
+    },
+    save(profile) {
+      memory = profile;
+      try { localStorage.setItem(KEY, JSON.stringify(profile)); } catch (e) { /* 메모리 사용 */ }
+    },
+    clear() {
+      memory = null;
+      try { localStorage.removeItem(KEY); } catch (e) { /* 무시 */ }
+    },
+  };
+})();
+
+/* 서버(Code.gs)와 통신 - 화면은 이 함수로만 운세를 받는다 */
+const Api = {
+  call_(fnName, arg) {
+    return new Promise((resolve, reject) => {
+      if (!(window.google && google.script && google.script.run)) {
+        reject(new Error('Apps Script 환경이 아니에요. 웹앱 주소로 열어 주세요.'));
+        return;
+      }
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(err => reject(new Error((err && err.message) || String(err))))[fnName](arg);
+    });
+  },
+  getHoroscopes(dateStr) { return this.call_('getHoroscopes', dateStr || undefined); },
+  getAvailableDates(month) { return this.call_('getAvailableDates', month); },
+  aiChat(req) { return this.call_('aiChat', req); },
+};
+
+/* 도우미 */
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const $ = sel => document.querySelector(sel);
+
+function formatDateKo(dateStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr || '');
+  if (!m) return '';
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return `${m[1]}년 ${Number(m[2])}월 ${Number(m[3])}일 (${WEEKDAYS[d.getDay()]})`;
+}
+/** "10월 16일 금요일" (연도 없는 긴 표기: 화면 제목용) */
+function formatDateLong(dateStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr || '');
+  if (!m) return '';
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return `${Number(m[2])}월 ${Number(m[3])}일 ${WEEKDAYS[d.getDay()]}요일`;
+}
+const fmtTime = ts => { const m = /(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2})/.exec(ts || ''); return m ? `${Number(m[2]) < 12 ? '오전' : '오후'} ${Number(m[2]) % 12 || 12}:${m[3]}` : ''; };
+
+let toastTimer = null;
+function toast(msg) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+/** 스크린리더에 화면 이름을 읽어 주는 안내 */
+function announce(text) {
+  const el = $('#announcer'); if (!el) return;
+  el.textContent = '';
+  setTimeout(() => { el.textContent = text; }, 60);
+}
+
+/* 바텀시트(작은 화면) / 모달(큰 화면). 열리면 포커스가 안으로 들어가고, Esc·바깥 터치로 닫히며, 닫히면 원래 자리로 돌아간다 */
+let sheetResolve = null, sheetOpener = null;
+function closeSheet(result) {
+  const wrap = $('#dialog');
+  if (wrap.hidden) return;
+  wrap.classList.remove('open');
+  wrap.onclick = null; wrap.onkeydown = null;
+  setTimeout(() => { if (!wrap.classList.contains('open')) { wrap.hidden = true; wrap.innerHTML = ''; } }, 240);
+  if (sheetOpener && sheetOpener.focus) { try { sheetOpener.focus(); } catch (e) { /* 무시 */ } }
+  const r = sheetResolve; sheetResolve = null;
+  if (r) r(result);
+}
+function openSheet(opts) {
+  return new Promise(resolve => {
+    const wrap = $('#dialog');
+    sheetOpener = document.activeElement; sheetResolve = resolve;
+    wrap.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" tabindex="-1">
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <h2 id="sheetTitle">${esc(opts.title)}</h2>
+      <div class="sheet-body">${opts.bodyHtml || ''}</div>
+      ${opts.actionsHtml || '<div class="actions"><button class="btn btn-secondary" data-r="close">닫기</button></div>'}</div>`;
+    wrap.hidden = false;
+    requestAnimationFrame(() => {
+      wrap.classList.add('open');
+      const sheet = wrap.querySelector('.sheet');
+      const first = sheet && sheet.querySelector('[data-r]');
+      (first || sheet).focus();
+    });
+    wrap.onclick = e => {
+      const b = e.target.closest('[data-r]');
+      if (b) return closeSheet(b.dataset.r);
+      if (e.target === wrap) closeSheet(null);
+    };
+    wrap.onkeydown = e => {
+      if (e.key === 'Escape') { closeSheet(null); return; }
+      if (e.key !== 'Tab') return;                               // 시트 밖으로 포커스가 나가지 않게 가둔다
+      const items = [...wrap.querySelectorAll('button, a[href], input, select, textarea')].filter(x => !x.disabled);
+      if (!items.length) return;
+      const first = items[0], last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+  });
+}
+/* 확인창 (브라우저 기본 confirm 대신 사용). 확인을 누르면 true */
+function confirmDialog(title, message, okLabel) {
+  return openSheet({
+    title, bodyHtml: `<p>${esc(message)}</p>`,
+    actionsHtml: `<div class="actions-2"><button class="btn btn-secondary" data-r="0">취소</button><button class="btn btn-danger" data-r="1">${esc(okLabel || '확인')}</button></div>`,
+  }).then(r => r === '1');
+}
+
+/* 반짝이는 별 배경 (가볍게: 점 30개, 투명도만 애니메이션) */
+(function makeStars() {
+  const box = $('#stars');
+  let html = '';
+  for (let i = 0; i < 30; i++) {
+    const size = Math.random() < .2 ? 3 : 2;
+    html += `<i style="left:${(Math.random() * 100).toFixed(1)}%;top:${(Math.random() * 100).toFixed(1)}%;width:${size}px;height:${size}px;animation-delay:${(Math.random() * 4).toFixed(2)}s;animation-duration:${(3 + Math.random() * 3).toFixed(2)}s"></i>`;
+  }
+  box.innerHTML = html;
+})();
+
+/* 아이콘 (Lucide 모양을 옮긴 인라인 SVG). icon('이름', 'sm') */
+const ICONS = {
+  home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
+  trophy: '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>',
+  calendar: '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  chat: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><path d="M12 8v4M10 10h4"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
+  back: '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+  share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98M15.41 6.51l-6.82 3.98"/>',
+  chevR: '<path d="m9 18 6-6-6-6"/>',
+  chevL: '<path d="m15 18-6-6 6-6"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+  alert: '<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>',
+  external: '<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  sparkles: '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/>',
+  box: '<path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
+  droplet: '<path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
+  moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  trash: '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>',
+};
+const icon = (name, cls) => `<svg class="ic${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICONS[name]}</svg>`;
+
+/* 로고 심볼: 초승달 + 별 */
+const LOGO_SVG = `<svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M44 8a26 26 0 1 0 12 40A22 22 0 0 1 44 8z" fill="#F3D58D"/>
+  <path d="M46 20l2.2 5.2 5.3.4-4.1 3.5 1.3 5.3-4.7-2.9-4.7 2.9 1.3-5.3-4.1-3.5 5.3-.4z" fill="#F3D58D"/></svg>`;
+</script>

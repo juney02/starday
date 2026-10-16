@@ -1,0 +1,9 @@
+{
+  "name": "byeolharu-tests",
+  "private": true,
+  "description": "별하루 자동 테스트 (Apps Script 코드를 가짜 환경에서 실행). 실행: npm install 후 npm test",
+  "scripts": {
+    "test": "node server.test.js && node ui.test.js && node regress.test.js && node design.test.js"
+  },
+  "devDependencies": { "jsdom": "^30.1.2" }
+}

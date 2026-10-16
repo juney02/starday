@@ -1,0 +1,11 @@
+# 깃허브(공개 저장소)에 올리지 않는 것
+# - clasp 연결 정보(스크립트·시트 ID)
+.clasp.json
+.clasp.*.json
+# - Google Stitch 시안, 화면 캡처
+stitch/
+디자인_비교/
+# - 설치 파일, 비밀 값 파일
+node_modules/
+.env
+*.log

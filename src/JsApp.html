@@ -1,0 +1,669 @@
+<script>
+/* ===== 앱 본체: 화면(페이지) 그리기 + 화면 이동 + 버튼 동작 =====
+   디자인은 Styles.html(디자인 시스템)의 컴포넌트만 사용한다. 새 화면을 만들 때도 같은 부품(.btn .card .tile …)을 쓴다. */
+
+const App = {
+  route: 'splash',
+  param: null,                 // detail·share 화면에서 보고 있는 별자리 key
+  prev: null,                  // 바로 전 화면 (뒤로가기용)
+  booted: false,
+  focusPending: false,
+  flash: false,                // 운세가 새로 갱신됐을 때 카드를 한 번 반짝이게 하는 표시
+  profile: Store.load(),       // 저장된 사용자 정보 (없으면 null)
+  data: null,                  // 서버에서 받은 오늘의 운세
+  dataState: 'idle',           // idle | loading | ready | error
+  dataError: '',
+  loadedAt: 0,
+  showJa: false,
+  form: null,                  // 입력 중인 프로필(온보딩/마이페이지 공유)
+  hist: null,                  // 운세 달력 상태
+  chat: { messages: [], busy: false },   // AI 도우미 대화 (이 화면을 열어 둔 동안만 기억, 저장하지 않음)
+};
+
+const DATA_ROUTES = ['home', 'ranking', 'detail', 'share'];
+const NAV_ROUTES = ['home', 'ranking', 'detail', 'history', 'ai', 'mypage', 'share'];
+const PAGE_NAMES = { splash: '시작 화면', onboarding: '내 별자리 등록', home: '오늘의 운세', ranking: '전체 순위', detail: '별자리 운세', history: '운세 기록', share: '공유 카드', ai: 'AI 도우미', mypage: '마이페이지' };
+const NAV_ITEMS = [
+  { route: 'home', short: '운세', label: '오늘 운세', icon: 'home' },
+  { route: 'ranking', short: '순위', label: '전체 순위', icon: 'trophy' },
+  { route: 'history', short: '기록', label: '운세 기록', icon: 'calendar' },
+  { route: 'ai', short: 'AI', label: 'AI 도우미', icon: 'chat' },
+  { route: 'mypage', short: '마이', label: '마이페이지', icon: 'user' },
+];
+
+/* ---------- 화면 이동 / 그리기 ---------- */
+function go(route, param) {
+  if (App.route !== route || App.param !== (param || null)) App.prev = { route: App.route, param: App.param };
+  App.route = route;
+  App.param = param || null;
+  App.showJa = false;
+  App.focusPending = App.booted;           // 사용자가 이동했을 때만 새 화면으로 포커스를 옮긴다
+  if (route === 'onboarding' || route === 'mypage') App.form = newForm(App.profile);
+  window.scrollTo(0, 0);
+  if (route === 'history') initHistory();
+  if (DATA_ROUTES.indexOf(route) >= 0 && App.dataState === 'idle') { loadData(); return; }
+  render();
+}
+function goBack() {
+  const p = App.prev;
+  if (p && p.route && p.route !== App.route) go(p.route, p.param); else go('home');
+}
+
+function renderNav(show) {
+  const nav = $('#nav');
+  nav.className = show ? 'show' : '';
+  if (!show) { nav.innerHTML = ''; return; }
+  const active = (App.route === 'detail' || App.route === 'share') ? 'ranking' : App.route;
+  nav.innerHTML = `<div class="nav-brand">${LOGO_SVG}<span>별하루</span></div>` + NAV_ITEMS.map(n =>
+    `<button class="nav-item" data-action="go" data-route="${n.route}" aria-label="${n.label}"${n.route === active ? ' aria-current="page"' : ''}>${icon(n.icon)}<span class="lbl-short">${n.short}</span><span class="lbl-full">${n.label}</span></button>`).join('');
+}
+
+function render() {
+  const show = NAV_ROUTES.indexOf(App.route) >= 0;
+  const app = $('#app');
+  app.className = show ? '' : 'no-nav';
+  app.innerHTML = '<div class="page">' + PAGES[App.route]() + '</div>';
+  renderNav(show);
+  if (App.flash) { const h = app.querySelector('.hero'); if (h) h.classList.add('flash'); App.flash = false; }
+  if (App.focusPending) {
+    App.focusPending = false;
+    announce(PAGE_NAMES[App.route] || '');
+    const h1 = app.querySelector('h1');
+    if (h1) { h1.tabIndex = -1; h1.focus({ preventScroll: true }); }
+  }
+}
+
+/* ---------- 데이터 불러오기 ---------- */
+function loadData() {
+  App.dataState = 'loading';
+  render();
+  Api.getHoroscopes()
+    .then(res => { App.data = res; App.dataState = 'ready'; App.loadedAt = Date.now(); render(); })
+    .catch(err => { App.dataState = 'error'; App.dataError = err.message; render(); });
+}
+
+/* 사용자가 아무것도 안 해도 최신 운세가 반영되도록: 조용히 다시 받아와서 바뀐 경우에만 화면을 갱신한다
+   (운세가 아직 없으면 1분마다, 이미 있으면 5분마다 확인. 화면이 보일 때만) */
+const POLL_WAITING_MS = 60 * 1000, POLL_READY_MS = 5 * 60 * 1000;
+function silentRefresh() {
+  App.loadedAt = Date.now();
+  Api.getHoroscopes().then(res => {
+    const prev = App.data;
+    const changed = !prev || res.version !== prev.version || res.date !== prev.date;
+    if (!changed) return;
+    const hadContent = prev && (prev.status === 'MOCK' || prev.status === 'PUBLISHED');
+    App.data = res; App.dataState = 'ready';
+    if (DATA_ROUTES.indexOf(App.route) >= 0) {
+      App.flash = true;
+      render();
+      if (prev && !hadContent && (res.status === 'MOCK' || res.status === 'PUBLISHED')) toast('오늘의 운세가 업데이트됐어요!');
+      else if (hadContent) toast('운세가 새로 갱신됐어요.');
+    }
+  }).catch(() => { /* 조용히 무시: 기존 화면 유지, 다음 주기에 다시 시도 */ });
+}
+function pollTick() {
+  if (document.visibilityState !== 'visible' || !App.profile || App.dataState !== 'ready') return;
+  const waiting = !App.data || (App.data.status !== 'MOCK' && App.data.status !== 'PUBLISHED');
+  if (Date.now() - App.loadedAt >= (waiting ? POLL_WAITING_MS : POLL_READY_MS)) silentRefresh();
+}
+
+/* ---------- 공통 화면 부품 ---------- */
+const stateCard = o => `<section class="state" role="status"><div class="ico">${icon(o.icon)}</div><h2>${esc(o.title)}</h2>${o.text ? `<p>${esc(o.text)}</p>` : ''}${o.actions || ''}</section>`;
+const loadingHtml = () => `<div role="status" aria-label="운세를 불러오는 중"><div class="skeleton sk-hero"></div><div class="skeleton sk-card"></div><div class="skeleton sk-line" style="width:60%"></div><p class="sr-only">별의 소식을 불러오는 중…</p></div>`;
+const mockBanner = () => `<div class="pill mock-banner" role="note">${icon('info', 'sm')}<span><b>테스트 운세</b> · 가상 데이터예요</span></div>`;
+const officialLink = (url, label) => `<a class="link-btn" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)} ${icon('external', 'sm')}</a>`;
+
+/* 데이터 상태(로딩/오류/미등록/링크만)에 맞는 화면을 대신 보여주고, 정상일 때만 content를 그린다 */
+function dataBlock(view, content, retryAction) {
+  if (view.state === 'loading' || view.state === 'idle') return loadingHtml();
+  if (view.state === 'error') {
+    return stateCard({ icon: 'moon', title: '운세를 불러오지 못했어요', text: view.error, actions: `<button class="btn" data-action="${retryAction}">다시 시도</button>` });
+  }
+  const d = view.data;
+  if (d.status === 'MOCK' || d.status === 'PUBLISHED') return (d.isMock ? mockBanner() : '') + content(d.items, d);
+  if (d.status === 'LINK_ONLY') {
+    return stateCard({
+      icon: 'link', title: '공식 게시물로 확인해 주세요', text: d.message + (d.official && d.official.publishedAt ? ' (게시 시각 ' + d.official.publishedAt + ')' : ''),
+      actions: d.official ? `<a class="btn" href="${esc(d.official.url)}" target="_blank" rel="noopener noreferrer">공식 게시물 보기</a>` : '',
+    });
+  }
+  // PENDING / NODATA / EXPIRED / FUTURE / ERROR
+  return stateCard({
+    icon: 'moon', title: d.message || '운세가 없어요',
+    text: d.status === 'PENDING' ? '운세가 올라오면 이 화면이 자동으로 갱신돼요. 이전 날짜의 운세를 오늘 운세로 보여주지 않아요.' : '',
+    actions: (d.latestDate ? `<button class="btn" data-action="see-date" data-date="${esc(d.latestDate)}">최근 운세 보기 (${esc(formatDateKo(d.latestDate))})</button>` : '') +
+      (d.official ? `<a class="btn btn-secondary" href="${esc(d.official.url)}" target="_blank" rel="noopener noreferrer">공식 게시물 보기</a>` : '') +
+      (d.status === 'ERROR' ? `<button class="btn" data-action="${retryAction}">다시 시도</button>` : ''),
+  });
+}
+const withData = content => dataBlock({ state: App.dataState, error: App.dataError, data: App.data }, content, 'retry');
+
+/* ---------- 운세 카드 조각들 ---------- */
+/* 핵심 한 줄(headline)과 자세한 설명(body)로 나눈다. 제목이 따로 있으면 제목이 핵심 한 줄. 없으면 첫 줄이 핵심 한 줄 */
+function splitFortune(it) {
+  const title = String(it.title_ko || '').trim();
+  const text = String(it.content_ko || it.content_ja || '').trim();
+  const lines = text.split(/\n+/).map(s => s.trim()).filter(Boolean);
+  const jaOnly = !it.content_ko && !!it.content_ja;
+  if (title) return { headline: title, body: lines.join('\n'), jaOnly };
+  return { headline: lines[0] || '', body: lines.slice(1).join('\n'), jaOnly };
+}
+const rankHtml = (rank, extraCls) => `<div class="rank ${extraCls || ''}"><span class="rank-num">${rank}</span><span class="rank-unit">위<span class="rank-total"> / 12위</span></span></div>`;
+
+function heroHtml(z, it, d, isMine) {
+  const rank = Number(it.rank), f = splitFortune(it);
+  return `<section class="hero" aria-labelledby="heroName">
+    <div class="hero-sign"><span class="sym" aria-hidden="true">${z.sym}</span><h2 id="heroName">${z.ko}</h2>${isMine ? '<span class="badge-my">MY</span>' : ''}</div>
+    <p class="hero-cap">${d.isMock ? '별자리 운세 (테스트)' : '별자리 운세'}</p>
+    <div class="rank-emblem" role="img" aria-label="${z.ko} ${rank}위, 12개 별자리 중">${rankHtml(rank, 'rank-pop')}</div>
+    ${f.headline ? `<p class="headline">${esc(f.headline)}</p>` : ''}
+  </section>`;
+}
+function bodyCardHtml(it) {
+  const f = splitFortune(it);
+  const note = f.jaOnly ? '<p class="note">한국어 번역이 없어 일본어 원문을 보여드려요.</p>' : '';
+  if (!f.body && !note) return '';
+  return `<section class="card" aria-label="자세한 운세"><h3 class="card-title">자세한 운세</h3>${f.body ? `<p class="prose">${esc(f.body)}</p>` : ''}${note}</section>`;
+}
+function jaBoxHtml(it, d) {
+  if (!App.showJa) return '';
+  const body = (it.title_ja || it.content_ja)
+    ? `${it.title_ja ? `<b>${esc(it.title_ja)}</b><br>` : ''}${esc(it.content_ja)}`
+    : `<span class="muted">${d.isMock ? '테스트 데이터에는 일본어 원문이 없어요.' : '일본어 원문이 등록되지 않았어요.'}</span>`;
+  return `<div class="ja-box" role="region" aria-label="일본어 원문">${body}</div>`;
+}
+function tilesHtml(it, d) {
+  const mock = d.isMock ? ' (가상)' : '', t = [];
+  if (it.lucky_item) t.push(['box', '행운 아이템', it.lucky_item + mock]);
+  if (it.lucky_color) t.push(['droplet', '행운 색상', it.lucky_color + mock]);
+  if (!t.length) return '';
+  return `<div class="tiles">${t.map(x => `<div class="tile"><span class="ico">${icon(x[0])}</span><span><span class="lbl">${x[1]}</span><span class="v">${esc(x[2])}</span></span></div>`).join('')}</div>`;
+}
+function metaHtml(it, d) {
+  const url = it.source_url || (d.official && d.official.url) || OFFICIAL_X_URL;
+  const label = /x\.com|twitter\.com/.test(url) ? '공식 X 게시물 보기' : '공식 페이지에서 보기';
+  const upd = d.updatedAt ? String(d.updatedAt).slice(0, 16) : '-';
+  return `<section aria-label="출처와 갱신 정보"><dl class="meta-list">
+      <div><dt>데이터 출처</dt><dd>${esc(it.source_name || '-')}</dd></div>
+      <div><dt>기준 날짜</dt><dd>${esc(formatDateKo(d.date))}</dd></div>
+      ${it.source_published_at ? `<div><dt>게시 시각</dt><dd>${esc(String(it.source_published_at).slice(0, 16))}</dd></div>` : ''}
+      <div><dt>업데이트 시간</dt><dd>${esc(upd)}</dd></div>
+    </dl><div style="margin-top:var(--s2)">${officialLink(url, label)}</div></section>`;
+}
+
+/* 별자리 하나의 운세 화면 (홈·상세·기록이 같이 사용). d = 서버에서 받은 해당 날짜의 데이터 */
+function fortuneView(key, items, isMine, d, opts) {
+  opts = opts || {};
+  const z = zodiacByKey(key);
+  const it = items.find(x => x.zodiac_sign === key);
+  if (!it) return stateCard({ icon: 'moon', title: '이 별자리의 운세가 아직 없어요' });
+  const jaBtn = `<button class="btn btn-secondary" data-action="toggle-ja" aria-expanded="${App.showJa}">${App.showJa ? '일본어 원문 숨기기' : '일본어 원문 보기'}</button>`;
+
+  if (opts.compact) {                      // 기록 화면: 간결한 요약 카드
+    const f = splitFortune(it);
+    return `<section class="card stack">
+      <div class="mini-hero"><span class="sym" aria-hidden="true">${z.sym}</span><div><span class="nm">${z.ko}${isMine ? ' <span class="badge-my">MY</span>' : ''}</span>${rankHtml(Number(it.rank))}</div></div>
+      ${f.headline ? `<p class="headline" style="text-align:left;margin:0">${esc(f.headline)}</p>` : ''}
+      ${f.body ? `<p class="prose">${esc(f.body)}</p>` : ''}
+      ${f.jaOnly ? '<p class="note">한국어 번역이 없어 일본어 원문을 보여드려요.</p>' : ''}
+      ${tilesHtml(it, d)}${jaBoxHtml(it, d)}
+      <div class="actions-2">${jaBtn}${metaLinkBtn(it, d)}</div></section>`;
+  }
+  return `<div class="stack-lg">
+    ${heroHtml(z, it, d, isMine)}
+    <div class="stack">${bodyCardHtml(it)}${jaBoxHtml(it, d)}${tilesHtml(it, d)}</div>
+    <div class="actions">
+      <button class="btn btn-lg" data-action="go" data-route="ranking">${icon('trophy', 'sm')} 12별자리 전체 순위 보기</button>
+      <div class="actions-2"><button class="btn btn-secondary" data-action="share" data-sign="${key}">${icon('share', 'sm')} 공유하기</button>${jaBtn}</div>
+    </div>
+    ${metaHtml(it, d)}
+  </div>`;
+}
+function metaLinkBtn(it, d) {
+  const url = it.source_url || (d.official && d.official.url) || OFFICIAL_X_URL;
+  const label = /x\.com|twitter\.com/.test(url) ? '공식 X 게시물 보기' : '공식 페이지에서 보기';
+  return `<a class="btn btn-secondary" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+}
+
+/* ---------- 프로필 입력(폼) ---------- */
+function newForm(p) {
+  return { sign: p ? p.sign : '', birthDate: p ? p.birthDate : '', birthTime: p ? p.birthTime : '', unknown: p ? !!p.birthTimeUnknown : false, notify: p ? !!p.notify : false, error: '' };
+}
+function localToday() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function signGridHtml(selected) {
+  return ZODIACS.map(z => `<button type="button" class="sign-btn ${z.key === selected ? 'on' : ''}" data-action="pick-sign" data-sign="${z.key}" aria-pressed="${z.key === selected}" aria-label="${z.ko} ${z.rg}">
+    <span class="sym" aria-hidden="true">${z.sym}</span><span class="nm">${z.ko}</span><span class="rg" aria-hidden="true">${z.rg}</span></button>`).join('');
+}
+function signSection(showLabel) {
+  return `<div class="field" id="fieldSign"><div class="label${showLabel === false ? ' sr-only' : ''}" id="signLabel">별자리 <span class="req" aria-hidden="true">*</span><span class="sr-only">(필수)</span></div>
+    <div class="sign-grid" id="signGrid" role="group" aria-labelledby="signLabel" aria-describedby="signHint">${signGridHtml(App.form.sign)}</div>
+    <p class="field-hint" id="signHint" aria-live="polite">생년월일을 입력하면 별자리를 추천해 드려요. 직접 바꿀 수도 있어요.</p></div>`;
+}
+function birthSection() {
+  const f = App.form;
+  return `<div class="field" id="fieldBirth"><label for="fBirth">생년월일 <span class="faint">(선택)</span></label>
+      <input class="input" type="date" id="fBirth" max="${localToday()}" value="${esc(f.birthDate)}" aria-describedby="birthHint">
+      <p class="field-hint" id="birthHint">달력에서 고르거나 직접 입력해요.</p></div>
+    <div class="field"><label for="fTime">태어난 시간 <span class="faint">(선택, 24시간 형식)</span></label>
+      <input class="input" type="time" id="fTime" value="${esc(f.birthTime)}" ${f.unknown ? 'disabled' : ''} aria-describedby="timeHint">
+      <label class="check"><input type="checkbox" id="fUnk" ${f.unknown ? 'checked' : ''}> 태어난 시간을 몰라요</label>
+      <p class="field-hint" id="timeHint">운세 순위는 출생 정보와 상관없이 정해져요.</p></div>`;
+}
+function notifySection() {
+  const f = App.form;
+  return `<div class="toggle-row"><div><div class="t">매일 아침 운세 알림</div><div class="note">지금은 설정만 저장돼요. 알림은 곧 제공될 예정이에요.</div></div>
+    <label class="switch"><input type="checkbox" id="fNotify" ${f.notify ? 'checked' : ''} aria-label="매일 아침 운세 알림"><span></span></label></div>`;
+}
+
+/* 어느 칸이 문제인지까지 알려 준다 */
+function checkForm() {
+  const f = App.form;
+  if (!zodiacByKey(f.sign)) return { msg: '별자리를 선택해 주세요.', field: 'sign' };
+  if (f.birthDate && f.birthDate > localToday()) return { msg: '생년월일은 오늘 이후로 입력할 수 없어요.', field: 'birth' };
+  if (f.birthTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(f.birthTime)) return { msg: '태어난 시간을 24시간 형식(예: 14:30)으로 입력해 주세요.', field: 'time' };
+  return { msg: '', field: '' };
+}
+const validateForm = () => checkForm().msg;
+function showFormError(c) {
+  const err = $('#formErr'); if (err) err.textContent = c.msg;
+  App.form.error = c.msg;
+  document.querySelectorAll('.field.has-error').forEach(x => x.classList.remove('has-error'));
+  const target = { sign: '.sign-btn', birth: '#fBirth', time: '#fTime' }[c.field];
+  const el = target && $(target);
+  if (c.field === 'birth' && $('#fieldBirth')) $('#fieldBirth').classList.add('has-error');
+  if (el) { el.setAttribute('aria-describedby', 'formErr'); el.focus(); }
+}
+function clearFormError() {
+  const err = $('#formErr'); if (err) err.textContent = '';
+  document.querySelectorAll('.field.has-error').forEach(x => x.classList.remove('has-error'));
+  if (App.form) App.form.error = '';
+}
+function saveProfile() {
+  const f = App.form;
+  App.profile = {
+    sign: f.sign, birthDate: f.birthDate || '', birthTime: f.unknown ? '' : (f.birthTime || ''),
+    birthTimeUnknown: !!f.unknown, notify: !!f.notify, updatedAt: new Date().toISOString(),
+  };
+  Store.save(App.profile);
+}
+
+/* ---------- 운세 달력 (기록) ---------- */
+function initHistory() {
+  if (!App.hist) App.hist = { month: localToday().slice(0, 7), avail: {}, sel: null, view: { state: 'idle', error: '', data: null } };
+  loadAvailability(App.hist.month);
+}
+function loadAvailability(month) {
+  const h = App.hist;
+  if (h.avail[month]) return;
+  Api.getAvailableDates(month).then(res => { h.avail[month] = res; if (App.route === 'history') render(); })
+    .catch(() => { h.avail[month] = { dates: [], error: true }; if (App.route === 'history') render(); });
+}
+function shiftMonth(delta) {
+  const [y, m] = App.hist.month.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  App.hist.month = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  App.hist.sel = null;
+  loadAvailability(App.hist.month);
+  render();
+}
+function pickDate(date) {
+  const h = App.hist;
+  h.sel = date; h.view = { state: 'loading', error: '', data: null };
+  render();
+  Api.getHoroscopes(date)
+    .then(res => { if (h.sel === date) { h.view = { state: 'ready', error: '', data: res }; if (App.route === 'history') render(); } })
+    .catch(err => { if (h.sel === date) { h.view = { state: 'error', error: err.message, data: null }; if (App.route === 'history') render(); } });
+}
+function calendarHtml() {
+  const h = App.hist, [y, m] = h.month.split('-').map(Number);
+  const first = new Date(y, m - 1, 1).getDay(), days = new Date(y, m, 0).getDate();
+  const today = localToday(), avail = h.avail[h.month];
+  const has = {}; ((avail && avail.dates) || []).forEach(d => { has[d] = true; });
+  let cells = '';
+  for (let i = 0; i < first; i++) cells += '<span></span>';
+  for (let d = 1; d <= days; d++) {
+    const ds = h.month + '-' + String(d).padStart(2, '0');
+    const future = ds > today;
+    cells += `<button class="cal-day ${has[ds] ? 'has' : ''} ${ds === h.sel ? 'sel' : ''} ${ds === today ? 'today' : ''}" data-action="hist-pick" data-date="${ds}" ${future ? 'disabled' : ''} aria-pressed="${ds === h.sel}" aria-label="${m}월 ${d}일${ds === today ? ', 오늘' : ''}${has[ds] ? ', 운세 기록 있음' : ''}">${d}</button>`;
+  }
+  const isCurrent = h.month >= today.slice(0, 7);
+  return `<section class="cal-card" aria-label="${y}년 ${m}월 달력">
+    <div class="cal-nav">
+      <button class="icon-btn" data-action="hist-prev" aria-label="이전 달">${icon('chevL')}</button>
+      <b aria-live="polite">${y}년 ${m}월</b>
+      <button class="icon-btn" data-action="hist-next" aria-label="다음 달" ${isCurrent ? 'disabled' : ''}>${icon('chevR')}</button></div>
+    <div class="cal-head" aria-hidden="true">${WEEKDAYS.map(w => `<span>${w}</span>`).join('')}</div>
+    <div class="cal">${cells}</div>
+    <p class="legend"><span class="dot" aria-hidden="true"></span> 운세 기록이 있는 날${avail && avail.mock ? ' (테스트 데이터)' : ''}${avail && avail.retentionDays ? ` · 최근 ${avail.retentionDays}일` : ''}${avail && avail.error ? ' · 기록 표시를 불러오지 못했어요' : ''}</p></section>`;
+}
+
+/* ---------- AI 도우미 (챗봇) ---------- */
+const AI_CHIPS = ['오늘 내 운세를 쉽게 풀어줘', '오늘 1위 별자리는 뭐야?', '내 별자리와 잘 맞는 별자리는?', '오늘 점심 메뉴 추천해줘', '요즘 기분이 좀 처져, 얘기 들어줄래?'];
+const AI_TOOL_LABEL = { get_horoscope: '운세 조회', get_ranking: '전체 순위', get_history: '운세 기록', compare_signs: '별자리 비교', get_app_help: '앱 안내' };
+// AI가 실수로 마크다운 기호를 보내도 화면에는 일반 글만 보여준다
+const plainText = t => String(t == null ? '' : t).replace(/```[a-zA-Z]*\n?/g, '').replace(/^\s{0,3}#{1,6}\s*/gm, '').replace(/^\s*[*•]\s+/gm, '- ').replace(/\*\*|__|\*|`/g, '').trim();
+
+function chatLogHtml() {
+  const c = App.chat;
+  if (!c.messages.length && !c.busy) {
+    return `<div class="chat-empty"><div class="ico">${icon('sparkles')}</div><p>무엇이든 편하게 물어보세요.<br>오늘 운세 풀이는 물론, 고민 상담·추천·일상 대화까지 함께해요.</p></div>`;
+  }
+  const bubbles = c.messages.map(m => {
+    if (m.role === 'user') return `<div class="cmsg me"><div class="bubble">${esc(m.text)}</div></div>`;
+    const used = (m.tools || []).filter((t, i, a) => a.indexOf(t) === i).map(t => AI_TOOL_LABEL[t]).filter(Boolean);
+    return `<div class="cmsg ai ${m.error ? 'err' : ''}"><div class="who">별하루 AI</div><div class="bubble">${esc(plainText(m.text))}</div>${used.length ? `<div class="used">확인한 정보: ${esc(used.join(', '))}</div>` : ''}</div>`;
+  }).join('');
+  const typing = c.busy ? '<div class="cmsg ai"><div class="who">별하루 AI</div><div class="bubble typing" role="status" aria-label="답을 만드는 중"><span></span><span></span><span></span></div></div>' : '';
+  return bubbles + typing;
+}
+/* 대화 화면만 다시 그린다 (입력 중인 글이 지워지지 않도록 페이지 전체는 건드리지 않는다) */
+function updateChatUi() {
+  if (App.route !== 'ai') return;
+  const log = $('#chatLog'); if (!log) return;
+  log.innerHTML = chatLogHtml();
+  const chips = $('.chips'); if (chips && App.chat.messages.length) chips.remove();
+  const send = $('#chatSend'); if (send) { send.disabled = App.chat.busy; send.classList.toggle('is-loading', App.chat.busy); }
+  const clear = $('#chatClear'); if (clear) clear.disabled = !App.chat.messages.length || App.chat.busy;
+  window.scrollTo(0, document.body.scrollHeight);
+}
+function sendChat(raw) {
+  const c = App.chat, text = String(raw == null ? '' : raw).trim();
+  if (!text || c.busy) return;
+  if (text.length > 500) { toast('질문은 500자 이내로 입력해 주세요.'); return; }
+  const history = c.messages.filter(m => !m.error).slice(-10).map(m => ({ role: m.role, text: m.text }));   // 이번 질문 이전의 대화
+  c.messages.push({ role: 'user', text });
+  c.busy = true;
+  const input = $('#chatInput'); if (input) { input.value = ''; input.style.height = 'auto'; }
+  updateChatUi();
+  Api.aiChat({ message: text, history, sign: App.profile && App.profile.sign })
+    .then(res => {
+      c.busy = false;
+      if (res && res.ok) c.messages.push({ role: 'assistant', text: res.reply, tools: res.tools || [] });
+      else c.messages.push({ role: 'assistant', text: (res && res.message) || '답을 받지 못했어요. 다시 시도해 주세요.', error: true });
+      updateChatUi();
+    })
+    .catch(() => {
+      c.busy = false;
+      c.messages.push({ role: 'assistant', text: '연결에 문제가 있어요. 잠시 뒤에 다시 시도해 주세요.', error: true });
+      updateChatUi();
+    });
+}
+
+/* ---------- 페이지들 ---------- */
+const barHead = (title, right) => `<header class="bar-head"><button class="icon-btn" data-action="back" aria-label="뒤로 가기">${icon('back')}</button><h1>${esc(title)}</h1>${right || '<span class="spacer"></span>'}</header>`;
+const PRIVACY_TEXT = ['이 앱은 회원가입이 없어요.', '입력한 별자리·생년월일·태어난 시간은 이 기기의 브라우저에만 저장되고 서버로 보내지지 않아요.', 'AI 도우미에는 내 별자리와 질문 내용만 전달돼요.', '마이페이지의 "내 데이터 초기화"로 언제든 지울 수 있어요.'];
+const SOURCE_TEXT = ['운세 순위와 내용의 출처는 일본 ABC TV "おはよう朝日です(오하아사)"의 공식 자료예요.', '이용 허락이 확인된 범위에서만 내용을 보여 드리고, 그렇지 않을 땐 공식 게시물 링크만 안내해요.', '한국어 번역은 보조 자료이며 원문과 다를 수 있어요.', '화면에 "테스트 운세"라고 보이면 개발 확인용 가상 데이터예요.'];
+
+const PAGES = {
+
+  /* 시작 */
+  splash() {
+    return `<section class="splash">
+      <div class="symbol fade-in">${LOGO_SVG}</div>
+      <h1 class="fade-in" style="animation-delay:.1s">별하루</h1>
+      <p class="en fade-in" style="animation-delay:.15s">BYEOLHARU</p>
+      <p class="lead fade-in" style="animation-delay:.25s">오늘 하루,<br>당신의 별은 어디에 있을까요?</p>
+      <p class="intro fade-in" style="animation-delay:.35s">매일 아침 나의 별을 만나는 시간. 12별자리 운세 순위를 한눈에 확인해 보세요.</p>
+      <button class="btn btn-lg cta fade-in" style="animation-delay:.45s" data-action="start">시작하기</button>
+    </section>`;
+  },
+
+  /* 사용자 정보 등록 */
+  onboarding() {
+    if (!App.form) App.form = newForm(App.profile);
+    return `<div class="stack-lg">
+      <div class="logo">${LOGO_SVG}<span>별하루</span></div>
+      <header><p class="eyebrow">내 별자리 등록 · 처음 한 번만</p><h1 style="font-size:var(--fs-title);margin-top:var(--s2)">당신의 별을<br>알려 주세요</h1>
+        <p class="muted" style="margin-top:var(--s2)">별자리만 고르면 바로 시작할 수 있어요. 나머지는 선택이에요.</p></header>
+      <div class="stack">
+        <section class="card step" aria-labelledby="st1"><div class="step-head"><span class="step-no" aria-hidden="true">1</span><h2 id="st1">별자리 선택</h2></div>${signSection(false)}</section>
+        <section class="card step" aria-labelledby="st2"><div class="step-head"><span class="step-no" aria-hidden="true">2</span><h2 id="st2">생년월일·태어난 시간</h2></div>${birthSection()}</section>
+        <section class="card step" aria-labelledby="st3"><div class="step-head"><span class="step-no" aria-hidden="true">3</span><h2 id="st3">알림</h2></div>${notifySection()}</section>
+      </div>
+      <p class="note">입력한 정보는 이 기기에만 저장되고 서버로 보내지지 않아요. <button class="link-btn" data-action="sheet-privacy">자세히 보기</button></p>
+      <div class="cta-bar"><p class="field-error" id="formErr" role="alert">${esc(App.form.error)}</p><button class="btn btn-lg" data-action="submit-onboarding">오늘의 운세 확인하기</button></div>
+    </div>`;
+  },
+
+  /* 오늘의 나의 운세 */
+  home() {
+    const z = zodiacByKey(App.profile && App.profile.sign);
+    if (!z) return PAGES.onboarding();
+    const ready = App.data && App.dataState === 'ready' && App.data.date;
+    return `<header class="home-head"><div class="logo">${LOGO_SVG}<span>별하루</span></div>
+        <button class="icon-btn" data-action="go" data-route="mypage" aria-label="설정 (마이페이지)">${icon('settings')}</button></header>
+      <div class="date-block"><p class="eyebrow">오늘의 운세</p><h1 class="date-title">${ready ? esc(formatDateLong(App.data.date)) : '오늘의 운세'}</h1></div>
+      ${withData((items, d) => fortuneView(z.key, items, true, d))}`;
+  },
+
+  /* 전체 순위 */
+  ranking() {
+    const my = App.profile && App.profile.sign;
+    const ready = App.data && App.dataState === 'ready';
+    return `<header class="page-head"><div><h1>오늘의 별자리 랭킹</h1>${ready ? `<p class="sub">${esc(formatDateKo(App.data.date))} 기준</p>` : ''}</div></header>
+      ${withData((items, d) => {
+        const mine = items.find(x => x.zodiac_sign === my), mz = zodiacByKey(my);
+        const myBar = mine && mz ? `<div class="my-bar"><span class="sym" aria-hidden="true">${mz.sym}</span><div class="who"><small>내 별자리</small><b>${mz.ko} · ${Number(mine.rank)}위</b></div>
+          <button class="btn btn-secondary btn-sm" data-action="scroll-my">내 순위 보기</button></div>` : '';
+        const list = items.map((it, i) => {
+          const z = zodiacByKey(it.zodiac_sign); if (!z) return '';
+          const r = Number(it.rank), isMine = it.zodiac_sign === my, hl = splitFortune(it).headline;
+          return `<li class="${r === 1 ? 'first' : ''}"><button class="rank-item moved ${r <= 3 ? 'r' + r : ''} ${isMine ? 'mine' : ''}" ${isMine ? 'id="myCard"' : ''} style="animation-delay:${Math.min(i, 8) * 30}ms"
+            data-action="detail" data-sign="${z.key}" aria-label="${r}위 ${z.ko}${isMine ? ' (내 별자리)' : ''}${hl ? ', ' + esc(hl) : ''}">
+            <span class="no" aria-hidden="true">${r}</span><span class="sym" aria-hidden="true">${z.sym}</span>
+            <span class="info"><span class="nm">${z.ko}${isMine ? '<span class="badge-my">MY</span>' : ''}</span>${hl ? `<span class="ttl">${esc(hl)}</span>` : ''}</span>${icon('chevR', 'sm chev')}</button></li>`;
+        }).join('');
+        return `${myBar}<ol class="rank-list" aria-label="별자리 순위 목록">${list}</ol>
+          <p class="note" style="margin-top:var(--s4)">별자리를 누르면 자세한 운세를 볼 수 있어요.${d.updatedAt ? ' · 업데이트 ' + esc(String(d.updatedAt).slice(0, 16)) : ''}</p>
+          ${d.official ? `<div>${officialLink(d.official.url, '공식 X 게시물 보기')}</div>` : ''}`;
+      })}`;
+  },
+
+  /* 별자리 상세 (전체 순위에서 진입) */
+  detail() {
+    const z = zodiacByKey(App.param);
+    if (!z) return PAGES.ranking();
+    const share = `<button class="icon-btn" data-action="share" data-sign="${z.key}" aria-label="공유하기">${icon('share')}</button>`;
+    return `${barHead('별자리 운세', share)}
+      ${withData((items, d) => fortuneView(z.key, items, z.key === (App.profile && App.profile.sign), d))}`;
+  },
+
+  /* 운세 기록 (달력) */
+  history() {
+    const h = App.hist, z = zodiacByKey(App.profile && App.profile.sign);
+    let detail;
+    if (h && h.sel) {
+      detail = `<h2 class="when">${esc(formatDateKo(h.sel))}</h2>` +
+        dataBlock(h.view, (items, d) => fortuneView(z ? z.key : 'aries', items, true, d, { compact: true }), 'hist-retry');
+    } else {
+      detail = '<p class="note" style="text-align:center">날짜를 누르면 그날의 내 별자리 운세를 볼 수 있어요.</p>';
+    }
+    return `<header class="page-head"><div><h1>운세 기록</h1><p class="sub">지난 날짜의 순위와 운세를 다시 볼 수 있어요.</p></div></header>
+      ${calendarHtml()}<div class="day-result" aria-live="polite">${detail}</div>`;
+  },
+
+  /* 공유 카드 (스토리 미리보기. 이미지 저장·공유는 준비 중) */
+  share() {
+    const z = zodiacByKey(App.param || (App.profile && App.profile.sign));
+    if (!z) return PAGES.home();
+    return `${barHead('공유 카드')}${withData((items, d) => {
+      const it = items.find(x => x.zodiac_sign === z.key);
+      if (!it) return stateCard({ icon: 'moon', title: '이 별자리의 운세가 아직 없어요' });
+      const rank = Number(it.rank);
+      return `<div class="stack-lg">
+        <div class="story" role="img" aria-label="공유 카드 미리보기: ${z.ko} 오늘 ${rank}위">
+          <div class="story-top"><span class="logo">${LOGO_SVG}<span>별하루</span></span><span class="story-date">${esc(d.date.replace(/-/g, '.'))}</span></div>
+          ${d.isMock ? '<span class="story-test">테스트 운세</span>' : ''}
+          <div class="story-mid"><span class="sym" aria-hidden="true">${z.sym}</span><div class="nm">${z.ko}</div>
+            <div class="rank-emblem"><div class="rank"><span class="rank-num">${rank}</span><span class="rank-unit">위</span></div></div></div>
+          <p class="story-tag">매일 아침 나의 별을 만나는 시간</p>
+        </div>
+        <div class="actions">
+          <button class="btn btn-lg" data-action="share-save">${icon('download', 'sm')} 이미지로 저장하기</button>
+          <button class="btn btn-secondary" data-action="share-send">${icon('share', 'sm')} 공유하기</button>
+          <p class="note" style="text-align:center">이미지 저장과 공유는 곧 만나요. 지금은 카드 모양만 미리 볼 수 있어요.</p>
+        </div></div>`;
+    })}`;
+  },
+
+  /* AI 도우미 */
+  ai() {
+    const z = zodiacByKey(App.profile && App.profile.sign), c = App.chat;
+    return `<header class="page-head"><div><h1>AI 도우미</h1>${z ? `<p class="sub">${esc(z.ko)} 기준으로 답해요</p>` : ''}</div>
+        <button class="btn btn-ghost btn-sm" id="chatClear" data-action="ai-clear" ${c.messages.length ? '' : 'disabled'}>대화 지우기</button></header>
+      <p class="note" style="margin-bottom:var(--s4)">운세와 상관없는 질문도 괜찮아요. 순위와 운세 문구는 공식 사이트에서 가져온 자료만 말하고, 그 밖의 답은 AI의 <b>참고 의견</b>이에요. 내 별자리와 질문 내용만 AI에 전달돼요.</p>
+      <div id="chatLog" class="chat-log" role="log" aria-live="polite">${chatLogHtml()}</div>
+      ${c.messages.length ? '' : `<div class="chips">${AI_CHIPS.map(q => `<button class="chip" data-action="ai-chip" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>`}
+      <div class="chat-input"><textarea id="chatInput" rows="1" maxlength="500" placeholder="무엇이든 물어보세요" aria-label="AI에게 질문하기"></textarea>
+        <button class="btn${c.busy ? ' is-loading' : ''}" id="chatSend" data-action="ai-send" ${c.busy ? 'disabled' : ''}>보내기</button></div>`;
+  },
+
+  /* 마이페이지 */
+  mypage() {
+    const z = zodiacByKey(App.profile && App.profile.sign);
+    if (!z) return PAGES.onboarding();
+    const p = App.profile, f = App.form;
+    const birth = p.birthDate ? p.birthDate.replace(/-/g, '.') + (p.birthTime ? ' · ' + fmtTime('2000-01-01 ' + p.birthTime) : '') : '생년월일을 입력하지 않았어요';
+    const dataKind = App.data && App.data.isMock ? '테스트(가상) 데이터' : (App.data && App.data.status === 'PUBLISHED' ? '공식 자료 기반' : '확인 중');
+    return `<header class="page-head"><h1>마이페이지</h1></header>
+      <section class="card profile" aria-label="내 프로필"><span class="ring" aria-hidden="true"><span class="sym">${z.sym}</span></span>
+        <div><div class="eyebrow">나의 별자리</div><div class="who">${z.ko}</div><div class="faint" style="font-size:var(--fs-sub)">${esc(birth)}</div></div></section>
+
+      <h2 class="sec-title">내 정보 <span class="faint" style="font-size:var(--fs-sub);font-weight:400">· 바꾸면 바로 저장돼요</span></h2>
+      <div class="stack"><section class="card stack">${signSection()}</section><section class="card stack">${birthSection()}</section></div>
+
+      <h2 class="sec-title">알림</h2>
+      <section class="card">${notifySection()}</section>
+
+      <h2 class="sec-title">정보</h2>
+      <section class="card list">
+        <button class="row-item" data-action="sheet-privacy"><span>개인정보 안내</span>${icon('chevR', 'sm chev')}</button>
+        <button class="row-item" data-action="sheet-source"><span>데이터 출처 안내</span>${icon('chevR', 'sm chev')}</button>
+        <a class="row-item" href="${OFFICIAL_SITE_URL}" target="_blank" rel="noopener noreferrer"><span>공식 오하아사 사이트</span>${icon('external', 'sm chev')}</a>
+        <a class="row-item" href="${OFFICIAL_X_URL}" target="_blank" rel="noopener noreferrer"><span>공식 X 계정</span>${icon('external', 'sm chev')}</a>
+        <div class="row-item"><span>현재 데이터</span><span class="val">${dataKind}</span></div>
+        <div class="row-item"><span>앱 버전</span><span class="val">0.3.0</span></div>
+      </section>
+
+      <div style="margin-top:var(--s7)"><button class="btn btn-danger" data-action="reset">${icon('trash', 'sm')} 내 데이터 초기화</button></div>`;
+  },
+};
+
+/* ---------- 버튼/입력 동작 ---------- */
+const sheetFromLines = (title, lines) => openSheet({ title, bodyHtml: lines.map(l => `<p>${esc(l)}</p>`).join('') });
+const ACTIONS = {
+  start() { go('onboarding'); },
+  go(el) { go(el.dataset.route); },
+  back() { goBack(); },
+  detail(el) { go('detail', el.dataset.sign); },
+  share(el) { go('share', el.dataset.sign || (App.profile && App.profile.sign)); },
+  'share-save'() { toast('이미지 저장은 곧 만나요.'); },
+  'share-send'() { toast('공유 기능은 곧 만나요.'); },
+  retry() { App.dataState = 'idle'; loadData(); },
+  'hist-retry'() { if (App.hist && App.hist.sel) pickDate(App.hist.sel); },
+  // 오늘 운세가 아직 없을 때: 가장 최근 날짜의 운세를 "그 날짜"로 기록 화면에서 보여준다 (오늘 운세로 바꿔치기하지 않음)
+  'see-date'(el) { const d = el.dataset.date; go('history'); App.hist.month = d.slice(0, 7); loadAvailability(App.hist.month); pickDate(d); },
+  'hist-prev'() { shiftMonth(-1); },
+  'hist-next'() { shiftMonth(1); },
+  'hist-pick'(el) { pickDate(el.dataset.date); },
+  'toggle-ja'() { App.showJa = !App.showJa; render(); },
+  'ai-send'() { const i = $('#chatInput'); sendChat(i ? i.value : ''); },
+  'ai-chip'(el) { sendChat(el.dataset.q); },
+  'ai-clear'() { if (App.chat.busy) return; App.chat.messages = []; render(); },
+  'sheet-privacy'() { sheetFromLines('개인정보 안내', PRIVACY_TEXT); },
+  'sheet-source'() { sheetFromLines('데이터 출처 안내', SOURCE_TEXT); },
+  'scroll-my'() {
+    const card = $('#myCard');
+    if (card) { card.scrollIntoView({ behavior: 'smooth', block: 'center' }); card.focus({ preventScroll: true }); } else toast('내 별자리를 찾지 못했어요.');
+  },
+  'pick-sign'(el) {
+    App.form.sign = el.dataset.sign;
+    $('#signGrid').innerHTML = signGridHtml(App.form.sign);
+    const btn = $('#signGrid .sign-btn.on'); if (btn) btn.focus({ preventScroll: true });
+    clearFormError();
+    autoSaveIfMyPage();
+  },
+  'submit-onboarding'() {
+    const c = checkForm();
+    if (c.msg) { showFormError(c); return; }
+    saveProfile();
+    go('home');
+    toast('등록 완료! 오늘의 운세를 확인해 보세요.');
+  },
+  async reset() {
+    const ok = await confirmDialog('내 데이터를 초기화할까요?', '이 기기에 저장된 별자리와 설정이 모두 삭제돼요.', '초기화');
+    if (!ok) return;
+    Store.clear(); App.profile = null; App.form = null; App.hist = null; App.chat = { messages: [], busy: false };
+    go('splash');
+    toast('초기화했어요.');
+  },
+};
+
+/* 마이페이지에서는 값을 바꾸는 즉시 저장한다 */
+function autoSaveIfMyPage() {
+  if (App.route !== 'mypage') return;
+  const msg = validateForm();
+  if (msg) { toast(msg); return; }
+  saveProfile();
+  toast('저장했어요.');
+}
+
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-action]');
+  if (!el || el.disabled) return;
+  const fn = ACTIONS[el.dataset.action];
+  if (fn) fn(el);
+});
+
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (!App.form) return;
+  if (t.id === 'fBirth') {
+    App.form.birthDate = t.value;
+    clearFormError();
+    const rec = signFromBirthDate(t.value);
+    const hint = $('#signHint');
+    if (rec && t.value <= localToday()) {
+      App.form.sign = rec;
+      $('#signGrid').innerHTML = signGridHtml(rec);
+      if (hint) hint.textContent = `생년월일로 ${zodiacByKey(rec).ko}를 추천했어요. 다르다면 직접 바꿔 주세요.`;
+    }
+    autoSaveIfMyPage();
+  } else if (t.id === 'fTime') {
+    App.form.birthTime = t.value;
+    clearFormError();
+    autoSaveIfMyPage();
+  } else if (t.id === 'fUnk') {
+    App.form.unknown = t.checked;
+    if (t.checked) { App.form.birthTime = ''; $('#fTime').value = ''; }
+    $('#fTime').disabled = t.checked;
+    autoSaveIfMyPage();
+  } else if (t.id === 'fNotify') {
+    App.form.notify = t.checked;
+    autoSaveIfMyPage();
+  }
+});
+
+/* AI 도우미 입력칸: Enter로 보내기(Shift+Enter는 줄바꿈), 글이 길어지면 칸이 늘어남 */
+document.addEventListener('keydown', e => {
+  if (e.target.id === 'chatInput' && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat(e.target.value); }
+});
+document.addEventListener('input', e => {
+  if (e.target.id === 'chatInput') { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'; }
+});
+
+/* 자동 갱신: 15초마다 확인하되 실제 요청은 위 주기(1분/5분)에 맞춰서만 보낸다. 앱을 다시 열면 바로 확인한다 */
+setInterval(pollTick, 15 * 1000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !App.profile || App.dataState !== 'ready') return;
+  if (Date.now() - App.loadedAt > POLL_WAITING_MS) silentRefresh();
+});
+
+/* ---------- 시작 ---------- */
+// 저장된 정보가 있으면 바로 오늘의 운세로, 없으면 시작 화면
+if (App.profile && zodiacByKey(App.profile.sign)) go('home'); else go('splash');
+App.booted = true;
+</script>

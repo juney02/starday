@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <base target="_blank">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>별하루 관리자</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+  <?!= include('AdminStyles') ?>
+  <style>
+    body { background: #0e1630; }
+    .adm { max-width: 1100px; margin: 0 auto; padding: 16px 16px 60px; }
+    .adm h1 { font-size: 20px; } .adm h2 { font-size: 16px; margin-bottom: 10px; }
+    .adm .card { margin-bottom: 14px; }
+    .adm .bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+    .adm .btn { display: inline-block; width: auto; font-size: 14px; padding: 9px 14px; border-radius: 12px; }
+    .adm .btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+    .adm input[type=text], .adm input[type=number], .adm input[type=password], .adm input[type=date], .adm select, .adm textarea {
+      width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg2); color: var(--text); font: inherit; color-scheme: dark; }
+    .adm textarea { min-height: 64px; resize: vertical; }
+    .pill { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 12px; font-weight: 700; background: var(--bg2); color: var(--sub); margin-right: 4px; }
+    .pill.good { background: rgba(120, 220, 160, .18); color: #8fe3b2; }
+    .pill.warn { background: rgba(243, 213, 141, .2); color: var(--gold); }
+    .pill.bad { background: rgba(255, 130, 130, .18); color: #ff9b9b; }
+    .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px 16px; }
+    .kvs div { padding: 6px 0; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 10px; font-size: 14px; }
+    .kvs span:first-child { color: var(--sub); }
+    table.t { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.t th, table.t td { padding: 8px 6px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    table.t th { color: var(--sub); font-weight: 500; white-space: nowrap; }
+    .row-card { border: 1px solid var(--line); border-radius: 14px; padding: 12px; margin-bottom: 10px; background: var(--bg2); }
+    .row-card .head { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+    .row-card .rk { width: 70px; }
+    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 640px) { .cols { grid-template-columns: 1fr; } }
+    .cols label { font-size: 12px; color: var(--sub); display: block; margin: 6px 0 3px; }
+    .msg { margin: 8px 0; padding: 9px 12px; border-radius: 10px; font-size: 13px; }
+    .msg.ok { background: rgba(120, 220, 160, .15); color: #8fe3b2; } .msg.err { background: rgba(255, 130, 130, .15); color: #ffb0b0; }
+    .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+    .tabs button { border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 16px; padding: 6px 14px; cursor: pointer; font: inherit; }
+    .tabs button.on { background: var(--gold); color: #1a2142; border-color: var(--gold); font-weight: 700; }
+    .chk { display: flex; gap: 8px; align-items: center; font-size: 13px; margin: 6px 0; }
+    .chk input { width: 18px; height: 18px; accent-color: #F3D58D; }
+  </style>
+</head>
+<body>
+<div class="adm" id="root"><p class="muted">불러오는 중…</p></div>
+
+<script>
+/* 관리자 화면. 모든 서버 호출은 토큰(또는 허용된 구글 계정)으로 서버에서 다시 검사한다. 화면에서 숨기는 것만으로 보호하지 않는다. */
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const KO = { aries: '양자리', taurus: '황소자리', gemini: '쌍둥이자리', cancer: '게자리', leo: '사자자리', virgo: '처녀자리', libra: '천칭자리', scorpio: '전갈자리', sagittarius: '사수자리', capricorn: '염소자리', aquarius: '물병자리', pisces: '물고기자리' };
+const A = { token: '', ov: null, tab: 'status', date: '', rows: [], msg: null };
+
+function tokenGet() { try { return sessionStorage.getItem('bh_admin') || ''; } catch (e) { return A.token; } }
+function tokenSet(t) { A.token = t; try { sessionStorage.setItem('bh_admin', t); } catch (e) { /* 메모리만 사용 */ } }
+function tokenClear() { A.token = ''; try { sessionStorage.removeItem('bh_admin'); } catch (e) { /* 무시 */ } }
+
+function call(fn) {
+  const args = Array.prototype.slice.call(arguments, 1);
+  return new Promise((resolve, reject) => {
+    if (!(window.google && google.script && google.script.run)) { reject(new Error('Apps Script 환경이 아니에요.')); return; }
+    const r = google.script.run.withSuccessHandler(resolve).withFailureHandler(e => reject(new Error(String((e && e.message) || e).replace(/^Error:\s*/, ''))));
+    r[fn].apply(r, [A.token].concat(args));
+  });
+}
+function say(text, ok) { A.msg = text ? { text, ok } : null; const m = $('#msg'); if (m) m.innerHTML = A.msg ? `<div class="msg ${ok ? 'ok' : 'err'}" role="alert">${esc(A.msg.text)}</div>` : ''; }
+function fail(e) {
+  const m = e.message || String(e);
+  if (/^(LOGIN|DENIED|LOCKED)/.test(m)) { A.ov = null; renderLogin(m.replace(/^\w+:\s*/, ''), /^LOCKED/.test(m)); return; }
+  say(m, false);
+}
+
+/* ---------- 로그인 ---------- */
+function renderLogin(message, locked) {
+  $('#root').innerHTML = `<div class="card" style="max-width:420px;margin:60px auto"><h1>별하루 관리자</h1>
+    <p class="muted small" style="margin:6px 0 14px">관리자 토큰을 입력해 주세요. (프로젝트 소유자가 편집기에서 setupAdminToken을 실행하면 만들어져요)</p>
+    <input type="password" id="tok" placeholder="관리자 토큰" autocomplete="off" ${locked ? 'disabled' : ''}>
+    <div class="err" style="margin-top:8px" id="loginErr">${esc(message || '')}</div>
+    <div class="btns"><button class="btn" id="loginBtn" ${locked ? 'disabled' : ''}>로그인</button></div></div>`;
+  if (!locked) { $('#loginBtn').onclick = () => { tokenSet($('#tok').value.trim()); start(); }; $('#tok').onkeydown = e => { if (e.key === 'Enter') $('#loginBtn').click(); }; }
+}
+function renderOff(message) { $('#root').innerHTML = `<div class="card" style="max-width:480px;margin:60px auto"><h1>관리자 기능이 꺼져 있어요</h1><p class="muted small" style="margin-top:8px">${esc(message)}</p></div>`; }
+
+function start() {
+  A.token = A.token || tokenGet();
+  call('adminOverview').then(ov => { A.ov = ov; A.date = A.date || ov.today; render(); loadRows(); })
+    .catch(e => {
+      const m = e.message || '';
+      if (/^NOT_CONFIGURED/.test(m)) return renderOff(m.replace(/^\w+:\s*/, ''));
+      if (/^(LOGIN|DENIED|LOCKED)/.test(m)) return renderLogin(/^LOGIN/.test(m) && !A.token ? '' : m.replace(/^\w+:\s*/, ''), /^LOCKED/.test(m));
+      $('#root').innerHTML = `<div class="card" style="max-width:480px;margin:60px auto"><p class="err">${esc(m)}</p></div>`;
+    });
+}
+
+/* ---------- 본 화면 ---------- */
+function pill(text, kind) { return `<span class="pill ${kind || ''}">${esc(text)}</span>`; }
+const stateKind = s => ({ VALID: 'good', PUBLISHED: 'good', DONE: 'good', SUCCESS: 'good', NEEDS_REVIEW: 'warn', REVIEW: 'warn', PENDING: 'warn', NONE: '', HIDDEN: '', INVALID: 'bad', FAILED: 'bad', NO_POST: 'warn', LINK_ONLY: 'warn', IMAGE_ONLY: 'warn', SKIPPED: '' }[s] || '');
+
+function render() {
+  const o = A.ov; if (!o) return;
+  const tabs = [['status', '현황'], ['data', '운세 데이터'], ['logs', '수신 기록'], ['settings', '설정']];
+  $('#root').innerHTML = `
+    <div class="bar"><div><h1>별하루 관리자</h1><p class="muted small">${esc(o.now)} · 한국 시간</p></div>
+      <div>${pill(o.mode === 'TEST' ? 'TEST MODE' : 'PRODUCTION', o.mode === 'TEST' ? 'warn' : 'good')}<button class="btn ghost" id="logout">로그아웃</button></div></div>
+    <div id="msg"></div>
+    <div class="tabs">${tabs.map(t => `<button data-tab="${t[0]}" class="${A.tab === t[0] ? 'on' : ''}">${t[1]}</button>`).join('')}</div>
+    <div id="pane">${A.tab === 'status' ? paneStatus(o) : A.tab === 'data' ? paneData(o) : A.tab === 'logs' ? paneLogs(o) : paneSettings(o)}</div>`;
+  say(A.msg && A.msg.text, A.msg && A.msg.ok);
+  bind();
+}
+
+function paneStatus(o) {
+  const t = o.todaySummary, s = o.source;
+  const auth = { UNVERIFIED: ['확인 전 (링크만 제공)', 'bad'], LINK_ONLY: ['링크만 허용', 'warn'], APPROVED: ['이용 허락 확인됨', 'good'] }[s.authorization_status] || [s.authorization_status, ''];
+  return `<div class="grid2">
+    <div class="card"><h2>오늘 (${esc(o.today)}) 데이터</h2><div class="kvs">
+      <div><span>저장된 별자리</span><span>${t.count} / 12 ${t.complete ? pill('순위 완전', 'good') : ''}</span></div>
+      <div><span>검증</span><span>${t.validation.length ? t.validation.map(v => pill(v, stateKind(v))).join('') : '-'}</span></div>
+      <div><span>번역</span><span>${t.translation.length ? t.translation.map(v => pill(v, stateKind(v))).join('') : '-'}</span></div>
+      <div><span>공개</span><span>${t.publication.length ? t.publication.map(v => pill(v, stateKind(v))).join('') : '-'} (${t.published}/12)</span></div>
+      <div><span>원본 게시물</span><span>${t.official ? `<a href="${esc(t.official.url)}" target="_blank" rel="noopener noreferrer">보기</a> · ${esc(t.official.publishedAt)}` : '아직 없음'}</span></div>
+    </div>${t.note ? `<p class="small" style="margin-top:8px;color:var(--gold)">검증 메모: ${esc(t.note)}</p>` : ''}
+    <div class="btns"><button class="btn" id="runNow">지금 데이터 확인</button></div></div>
+
+    <div class="card"><h2>출처 · 자동 확인</h2><div class="kvs">
+      <div><span>계정</span><span>@${esc(s.username)}</span></div>
+      <div><span>이용 허락</span><span>${pill(auth[0], auth[1])}</span></div>
+      <div><span>자동 갱신</span><span>${s.enabled ? pill('켜짐', 'good') : pill('꺼짐', 'bad')}</span></div>
+      <div><span>자동 실행 트리거</span><span>${o.triggersInstalled ? pill('설치됨', 'good') : pill('없음', 'bad')}</span></div>
+      <div><span>마지막 확인</span><span>${esc(s.last_checked_at || '-')}</span></div>
+      <div><span>마지막 성공</span><span>${esc(s.last_success_at || '-')}</span></div>
+      <div><span>오늘 슬롯</span><span>${o.slots.map(x => pill(x.slot + (x.done ? ' ✓' : ''), x.done ? 'good' : '')).join('')}</span></div>
+      <div><span>X API 토큰</span><span>${o.secrets.xToken ? pill('등록됨', 'good') : pill('없음', 'bad')}</span></div>
+      <div><span>번역 API 키</span><span>${o.secrets.anthropic ? pill('등록됨', 'good') : pill('없음', 'warn')}</span></div>
+      <div><span>AI 도우미 (Gemini)</span><span>${o.secrets.gemini ? pill('키 등록됨', 'good') : pill('키 없음', 'warn')} ${o.ai.enabled ? pill('켜짐', 'good') : pill('꺼짐', 'bad')}</span></div>
+      <div><span>AI 오늘 사용</span><span>${esc(o.ai.usedToday)} / ${esc(o.ai.dailyLimit)}회 · ${esc(o.ai.model)}</span></div>
+      ${o.ai.lastError ? `<div><span>AI 마지막 오류</span><span style="color:var(--gold);text-align:right">${esc(o.ai.lastError)}</span></div>` : ''}
+    </div>
+    <div class="btns"><button class="btn ghost" id="toggleAuto">${s.enabled ? '자동 갱신 끄기' : '자동 갱신 켜기'}</button>
+      <button class="btn ghost" id="toggleTrig">${o.triggersInstalled ? '자동 실행 해제' : '자동 실행 설치'}</button></div></div>
+  </div>
+  ${o.mode === 'PRODUCTION' && s.authorization_status !== 'APPROVED' ? '<div class="msg err">운영 모드지만 이용 허락이 APPROVED가 아니에요. 사용자에게는 공식 게시물 링크만 보여요.</div>' : ''}`;
+}
+
+function paneData(o) {
+  const rows = A.rows;
+  return `<div class="card"><div class="row" style="gap:10px;flex-wrap:wrap">
+      <input type="date" id="dDate" value="${esc(A.date)}" style="width:auto"><button class="btn ghost" id="dLoad">불러오기</button>
+      <button class="btn ghost" id="dTrans">번역 실행</button><button class="btn ghost" id="dManual">수동 입력 시작</button></div>
+    <div class="chk" style="margin-top:10px"><input type="checkbox" id="cReviewed"><label for="cReviewed">검토 완료 (검토 필요 항목을 직접 확인했어요)</label></div>
+    <div class="chk"><input type="checkbox" id="cDate"><label for="cDate">게시물의 운세 날짜가 이 날짜가 맞는지 직접 확인했어요 (날짜 오류가 있을 때만 저장 시 적용)</label></div>
+    <div class="btns"><button class="btn" id="dPub">공개</button><button class="btn ghost" id="dUnpub">비공개 처리</button></div>
+    <p class="note" style="margin-top:8px">공개 조건: 12별자리·1~12위 완전, 검증 통과, 번역 DONE(설정에 따라), 운영 모드에서는 이용 허락 APPROVED. 수정한 행은 자동 수집이 덮어쓰지 않아요.</p></div>
+  ${rows.length ? rows.map(rowCard).join('') : '<div class="card"><p class="muted">이 날짜의 데이터가 없어요.</p></div>'}`;
+}
+function rowCard(r) {
+  return `<div class="row-card" data-id="${esc(r.id)}">
+    <div class="head"><input type="number" min="1" max="12" class="rk" data-f="rank" value="${esc(r.rank)}" aria-label="순위">
+      <b>${esc(KO[r.zodiac_sign] || r.zodiac_sign)}</b>${pill(r.validation_status, stateKind(r.validation_status))}${pill(r.publication_status, stateKind(r.publication_status))}
+      <select data-f="translation_status" style="width:auto" aria-label="번역 상태">${['NONE', 'PENDING', 'DONE', 'REVIEW', 'FAILED'].map(s => `<option ${r.translation_status === s ? 'selected' : ''}>${s}</option>`).join('')}</select>
+      <button class="btn ghost save">저장</button></div>
+    <div class="cols"><div><label>일본어 원문</label><textarea data-f="content_ja">${esc(r.content_ja)}</textarea>
+        <label>행운 아이템 (일본어)</label><input type="text" data-f="lucky_item_ja" value="${esc(r.lucky_item_ja)}">
+        <label>행운 색상 (일본어)</label><input type="text" data-f="lucky_color_ja" value="${esc(r.lucky_color_ja)}"></div>
+      <div><label>한국어 번역</label><textarea data-f="content_ko">${esc(r.content_ko)}</textarea>
+        <label>행운 아이템 (한국어)</label><input type="text" data-f="lucky_item" value="${esc(r.lucky_item)}">
+        <label>행운 색상 (한국어)</label><input type="text" data-f="lucky_color" value="${esc(r.lucky_color)}"></div></div>
+    ${r.validation_note ? `<p class="small" style="margin-top:6px;color:var(--gold)">${esc(r.validation_note)}</p>` : ''}
+    <p class="note">출처: ${esc(r.source_name)} ${r.source_post_url ? `· <a href="${esc(r.source_post_url)}" target="_blank" rel="noopener noreferrer">게시물</a>` : ''} ${r.source_published_at ? '· ' + esc(r.source_published_at) : ''}</p></div>`;
+}
+
+function paneLogs(o) {
+  return `<div class="card" style="overflow-x:auto"><h2>최근 수신 기록</h2><table class="t"><thead><tr><th>시작</th><th>실행</th><th>모드</th><th>상태</th><th>발견/유효</th><th>메시지</th></tr></thead><tbody>
+    ${o.logs.length ? o.logs.map(l => `<tr><td>${esc(l.started_at)}</td><td>${esc(l.trigger)}</td><td>${esc(l.data_mode)}</td><td>${pill(l.import_status, stateKind(l.import_status))}</td><td>${esc(l.records_found)}/${esc(l.valid_records)}</td><td>${esc(l.error_message)}</td></tr>`).join('') : '<tr><td colspan="6" class="muted">기록이 없어요.</td></tr>'}
+    </tbody></table></div>`;
+}
+
+function paneSettings(o) {
+  const s = o.settings;
+  const chk = (id, label, on, hint) => `<div class="chk"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><label for="${id}">${label}${hint ? `<br><span class="note">${hint}</span>` : ''}</label></div>`;
+  return `<div class="card"><h2>설정</h2><div class="grid2">
+    <div><label class="label">동작 모드</label><select id="sMode"><option value="TEST" ${o.mode === 'TEST' ? 'selected' : ''}>TEST (가상 데이터)</option><option value="PRODUCTION" ${o.mode === 'PRODUCTION' ? 'selected' : ''}>PRODUCTION (실제 데이터)</option></select>
+      <p class="note" style="margin-top:4px">운영 모드는 X API 토큰과 이용 허락이 있어야 내용이 공개돼요.</p></div>
+    <div><label class="label">운영 모드 수집 경로</label><select id="sProd"><option value="SITE" ${s.PROD_SOURCE === 'SITE' ? 'selected' : ''}>공식 사이트 (horoscope.json)</option><option value="X" ${s.PROD_SOURCE === 'X' ? 'selected' : ''}>X 공식 API (토큰 필요)</option></select>
+      <p class="note" style="margin-top:4px">공식 사이트 경로는 X API 비용이 들지 않아요.</p></div>
+    <div><label class="label">출처 이용 허락 상태</label><select id="sAuth">${['UNVERIFIED', 'LINK_ONLY', 'APPROVED'].map(v => `<option ${o.source.authorization_status === v ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      <p class="note" style="margin-top:4px">APPROVED는 저장·번역·재배포 허락을 서면 등으로 확인했을 때만 선택하세요.</p></div>
+    <div><label class="label">테스트 시나리오 (TEST 모드)</label><select id="sScen">${o.scenarios.map(v => `<option ${s.TEST_SCENARIO === v ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+    <div><label class="label">운세 보관·표시 기간 (일, 0 = 제한 없음)</label><input type="number" id="sRet" min="0" max="3650" value="${esc(s.RETENTION_DAYS)}"></div></div>
+    <div class="grid2" style="margin-top:12px">
+      <div><label class="label">AI 하루 사용 한도 (회)</label><input type="number" id="sAiLimit" min="1" max="1000" value="${esc(o.ai.dailyLimit)}"></div>
+      <div><label class="label">Gemini 모델 이름</label><input type="text" id="sAiModel" value="${esc(o.ai.model)}"><p class="note" style="margin-top:4px">답이 안 나오면 편집기에서 listGeminiModels를 실행해 쓸 수 있는 이름을 확인하세요.</p></div></div>
+    <div style="margin-top:12px"><label class="label">예비 Gemini 모델 (선택)</label><input type="text" id="sAiFb" value="${esc(o.ai.fallbackModel)}" placeholder="비워 두면 사용 안 함">
+      <p class="note" style="margin-top:4px">기본 모델이 계속 "요청이 몰림(503)"일 때 자동으로 넘어갈 모델이에요. listGeminiModels로 확인한 이름을 넣으세요.</p></div>
+    ${chk('sAiOn', 'AI 도우미 사용', o.ai.enabled, 'AI 키가 있어야 동작해요. 끄면 사용자 화면에 "잠시 꺼져 있어요"가 보여요.')}
+    ${chk('sAuto', '검증을 통과한 데이터를 자동 공개', s.AUTO_PUBLISH, '꺼두면 관리자가 확인 후 "공개"를 눌러야 해요. (권장)')}
+    ${chk('sNeedTr', '한국어 번역이 끝나야 공개', s.PUBLISH_REQUIRES_TRANSLATION)}
+    ${chk('sFall', 'TEST 모드에서 저장된 데이터가 없으면 즉석 가상 운세 표시', s.TEST_FALLBACK)}
+    ${chk('sOcr', '이미지 게시물 분석 사용 (API 키·이용 허락 필요, 결과는 항상 검토)', s.OCR_ENABLED)}
+    <div class="btns"><button class="btn" id="sSave">설정 저장</button></div></div>`;
+}
+
+/* ---------- 동작 연결 ---------- */
+function bind() {
+  $('#logout').onclick = () => { tokenClear(); A.ov = null; renderLogin('로그아웃했어요.'); };
+  document.querySelectorAll('.tabs button').forEach(b => { b.onclick = () => { A.tab = b.dataset.tab; render(); }; });
+  const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+
+  on('#runNow', () => { say('확인 중…', true); call('adminRunImport').then(r => { A.ov = r.overview; render(); say(`${r.result.status}: ${r.result.message || ''}`, r.result.status !== 'FAILED'); loadRows(); }).catch(fail); });
+  on('#toggleAuto', () => call('adminSetSettings', { enabled: !A.ov.source.enabled }).then(o => { A.ov = o; say('저장했어요.', true); render(); }).catch(fail));
+  on('#toggleTrig', () => call('adminSetTriggers', !A.ov.triggersInstalled).then(o => { A.ov = o; say('저장했어요.', true); render(); }).catch(fail));
+
+  on('#dLoad', () => { A.date = $('#dDate').value; loadRows(); });
+  on('#dTrans', () => { say('번역 중…', true); call('adminTranslate', A.date).then(r => { A.rows = r.rows; say('번역: ' + r.note, true); render(); refresh(); }).catch(fail); });
+  on('#dManual', () => call('adminInitManual', A.date).then(rows => { A.rows = rows; say('12개 빈 행을 만들었어요. 일본어 원문과 순위를 입력해 주세요.', true); render(); }).catch(fail));
+  on('#dPub', () => call('adminSetPublication', A.date, 'publish', $('#cReviewed').checked).then(rows => { A.rows = rows; say('공개했어요.', true); render(); refresh(); }).catch(fail));
+  on('#dUnpub', () => call('adminSetPublication', A.date, 'unpublish').then(rows => { A.rows = rows; say('비공개로 바꿨어요.', true); render(); refresh(); }).catch(fail));
+  document.querySelectorAll('.row-card .save').forEach(btn => {
+    btn.onclick = () => {
+      const card = btn.closest('.row-card'), patch = {};
+      card.querySelectorAll('[data-f]').forEach(el => { patch[el.dataset.f] = el.value; });
+      call('adminSaveRow', card.dataset.id, patch, $('#cDate').checked).then(rows => { A.rows = rows; say('저장했어요.', true); render(); refresh(); }).catch(fail);
+    };
+  });
+
+  on('#sSave', () => {
+    const change = { MODE: $('#sMode').value, PROD_SOURCE: $('#sProd').value, authorization_status: $('#sAuth').value, TEST_SCENARIO: $('#sScen').value, RETENTION_DAYS: $('#sRet').value,
+      AUTO_PUBLISH: $('#sAuto').checked, PUBLISH_REQUIRES_TRANSLATION: $('#sNeedTr').checked, TEST_FALLBACK: $('#sFall').checked, OCR_ENABLED: $('#sOcr').checked,
+      AI_ENABLED: $('#sAiOn').checked, AI_DAILY_LIMIT: $('#sAiLimit').value, GEMINI_MODEL: $('#sAiModel').value, GEMINI_FALLBACK_MODEL: $('#sAiFb').value };
+    call('adminSetSettings', change).then(o => { A.ov = o; say('설정을 저장했어요.', true); render(); loadRows(); }).catch(fail);
+  });
+}
+function loadRows() { if (!A.date) return; call('adminRows', A.date).then(rows => { A.rows = rows; if (A.tab === 'data') render(); }).catch(fail); }
+function refresh() { call('adminOverview').then(o => { A.ov = o; }).catch(() => {}); }
+
+A.token = tokenGet();
+start();
+</script>
+</body>
+</html>

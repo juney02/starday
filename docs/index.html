@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>별하루</title>
+<meta name="description" content="오하아사 12별자리 운세를 매일 확인하는 별하루 앱으로 이동합니다.">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#08112E">
+<!-- 별하루 앱(Google Apps Script 웹앱)으로 바로 이동하는 입구 페이지. 앱 주소가 바뀌면 아래 APP_URL 한 곳만 고친다 -->
+<script>
+  var APP_URL = 'https://script.google.com/macros/s/AKfycbztGoB92w6O0-HbJpLdeo5BzcvwVPtFSMlVQX8yDA4joz2bTCkeY9h6IQpoSWOtPII/exec';
+  location.replace(APP_URL);
+</script>
+<style>
+  :root { --bg: #08112E; --card: #111A37; --gold: #F3D58D; --text: #F5F7FF; --sub: #BAC7E7; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px 16px;
+    background: radial-gradient(120% 80% at 50% 0%, #1A2550 0%, var(--bg) 60%); color: var(--text);
+    font-family: 'Pretendard Variable', Pretendard, -apple-system, 'Malgun Gothic', system-ui, sans-serif; }
+  main { width: 100%; max-width: 360px; text-align: center; background: var(--card); border: 1px solid rgba(186,199,231,.18);
+    border-radius: 24px; padding: 40px 24px; }
+  .moon { font-size: 48px; line-height: 1; margin-bottom: 16px; }
+  h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: -.02em; }
+  p { margin: 0 0 24px; color: var(--sub); font-size: 16px; line-height: 1.6; }
+  a.btn { display: block; min-height: 52px; line-height: 52px; border-radius: 14px; background: var(--gold); color: #1B1606;
+    font-weight: 700; font-size: 17px; text-decoration: none; }
+  a.btn:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+  small { display: block; margin-top: 16px; color: var(--sub); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="moon" aria-hidden="true">🌙</div>
+  <h1>별하루</h1>
+  <p>별하루 앱으로 이동하고 있어요.<br>화면이 바뀌지 않으면 아래 버튼을 눌러 주세요.</p>
+  <a class="btn" href="https://script.google.com/macros/s/AKfycbztGoB92w6O0-HbJpLdeo5BzcvwVPtFSMlVQX8yDA4joz2bTCkeY9h6IQpoSWOtPII/exec">별하루 열기</a>
+  <small>구글 계정 로그인이 필요해요.</small>
+</main>
+</body>
+</html>
