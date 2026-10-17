@@ -674,6 +674,16 @@ function xFeed(e, date, scenario) {
   const wd = e.call(`getHoroscopes()`);
   ok(wd.status === 'PENDING' && !wd.weekend && wd.latestDate === '2026-10-15', '평일에는 주말 안내가 아니라 기존 대기 안내 + 최근 운세 버튼');
   ok(/공개되지 않아요/.test(e.call(`AiTools.run('get_app_help', {topic:'weekend'}, {sign:null, today:'2026-10-17'})`).text), 'AI 도우미 안내: 주말에는 운세가 공개되지 않음');
+
+  // 11-2. 예전 버전이 시트에 남긴 "AI 주말 운세" 행: 보여주지 않고 자동으로 지움 (공식 자료 행은 그대로)
+  e = env(); e.setNow('2026-10-17 08:00'); e.run('tick()');     // 금요일 공식 자료가 기록으로 저장됨
+  e.run(`SIGN_LIST = ${j(SIGNS)}; SIGN_LIST.forEach(function (s, i) { Db.append('daily_horoscopes', { id: 'ai' + i, horoscope_date: '2026-10-17', zodiac_sign: s, rank: i + 1, content_ko: 'AI 문구', source_name: '별하루 AI 주말 운세 (오하아사 아님)', validation_status: 'VALID', publication_status: 'PUBLISHED', data_mode: 'PRODUCTION' }); })`);
+  e.cache['hs2:PRODUCTION:2026-10-17'] = JSON.stringify({ status: 'PUBLISHED', date: '2026-10-17', items: [{ rank: 1 }], isMock: false });   // 예전 결과가 캐시에 남아 있어도
+  e.setNow('2026-10-17 22:00');
+  const lg = e.call(`getHoroscopes()`);
+  ok(lg.status === 'PENDING' && lg.weekend === true && lg.items.length === 0, '남아 있던 AI 운세 대신 주말 안내가 나옴(캐시도 비움)');
+  ok(e.call(`Db.readAll('daily_horoscopes').filter(x => /AI 주말/.test(x.source_name)).length`) === 0 && e.call(`HoroscopeRepo.rowsForDate('2026-10-16','PRODUCTION').length`) === 12, '옛 AI 행만 지우고 공식 자료(금요일)는 그대로');
+  ok(e.call(`getAvailableDates('2026-10').dates`).indexOf('2026-10-17') < 0, '달력에도 AI 날짜가 나오지 않음');
 }
 
 console.log(`\n통과 ${passes} / 실패 ${fails}`);

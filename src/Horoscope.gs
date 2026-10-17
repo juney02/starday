@@ -7,12 +7,28 @@
  *  status: 'MOCK'(테스트 데이터) | 'PUBLISHED'(공개된 운세) | 'LINK_ONLY'(게시물 링크만 제공)
  *          | 'PENDING'(아직 없음) | 'NODATA'(과거 날짜에 기록 없음) | 'EXPIRED'(보관 기간 지남) | 'FUTURE' | 'ERROR'
  */
+// 2026-10-17에 잠깐 있었던 "AI 주말 운세"가 시트에 남긴 행의 출처 이름. 이 행은 읽지 않고, 한 번 자동으로 지운다
+const LEGACY_AI_SOURCE = '별하루 AI 주말 운세 (오하아사 아님)';
+
+/** 시트에 남은 옛 AI 주말 운세 행을 지운다 (출처 이름이 정확히 같은 행만). 처음 한 번만 실행 */
+function purgeLegacyAiRows_() {
+  if (Settings.get('LEGACY_AI_PURGED', '') === '1') return 0;
+  const rows = Db.readAll(CONFIG.SHEET.HOROSCOPES).filter(function (r) { return r.source_name === LEGACY_AI_SOURCE; });
+  if (rows.length) {
+    Db.deleteRows(CONFIG.SHEET.HOROSCOPES, rows.map(function (r) { return r._row; }));
+    const dates = {}; rows.forEach(function (r) { dates[r.horoscope_date] = true; });
+    Object.keys(dates).forEach(function (d) { HoroscopeRepo.invalidate(d); });
+  }
+  Settings.set('LEGACY_AI_PURGED', '1');
+  return rows.length;
+}
+
 const HoroscopeRepo = {
   cacheKey_: function (mode, date) { return 'hs2:' + mode + ':' + date; },
 
   rowsForDate: function (date, mode) {
     return Db.readAll(CONFIG.SHEET.HOROSCOPES)
-      .filter(function (r) { return r.horoscope_date === date && r.data_mode === mode; })
+      .filter(function (r) { return r.horoscope_date === date && r.data_mode === mode && r.source_name !== LEGACY_AI_SOURCE; })
       .map(function (r) { r.rank = r.rank === '' ? '' : Number(r.rank); return r; });
   },
 
@@ -56,6 +72,7 @@ const HoroscopeService = {
     const days = Settings.retentionDays();
     if (days && date < addDays_(now.date, -days)) return fail('EXPIRED', '보관 기간(' + days + '일)이 지난 날짜예요.');
 
+    try { purgeLegacyAiRows_(); } catch (e) { /* 지우기에 실패해도 읽을 때 걸러진다 */ }
     const mode = Settings.mode();
     const cache = CacheService.getScriptCache();
     const key = HoroscopeRepo.cacheKey_(mode, date);
@@ -114,7 +131,7 @@ const HoroscopeService = {
     const byDate = {};
     const oldest = addDays_(date, -7);
     Db.readAll(CONFIG.SHEET.HOROSCOPES).forEach(function (r) {
-      if (r.data_mode === mode && r.publication_status === STATUS.PUBLISHED && r.horoscope_date < date && r.horoscope_date >= oldest) {
+      if (r.data_mode === mode && r.publication_status === STATUS.PUBLISHED && r.source_name !== LEGACY_AI_SOURCE && r.horoscope_date < date && r.horoscope_date >= oldest) {
         (byDate[r.horoscope_date] = byDate[r.horoscope_date] || []).push(r);
       }
     });
@@ -172,7 +189,7 @@ const HoroscopeService = {
     }
     const byDate = {};
     Db.readAll(CONFIG.SHEET.HOROSCOPES).forEach(function (r) {
-      if (r.data_mode === mode && r.publication_status === STATUS.PUBLISHED && inRange(r.horoscope_date)) (byDate[r.horoscope_date] = byDate[r.horoscope_date] || []).push(r);
+      if (r.data_mode === mode && r.publication_status === STATUS.PUBLISHED && r.source_name !== LEGACY_AI_SOURCE && inRange(r.horoscope_date)) (byDate[r.horoscope_date] = byDate[r.horoscope_date] || []).push(r);
     });
     const ok = mode === 'PRODUCTION' && Source.authorization() !== 'APPROVED' ? [] :
       Object.keys(byDate).filter(function (d) { return HoroscopeRepo.isComplete(byDate[d]); }).sort();
