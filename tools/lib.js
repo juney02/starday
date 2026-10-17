@@ -29,6 +29,7 @@ function datasets(variant) {
   if (variant === 'real') Object.keys(data).forEach(k => realLike(data[k]));
   if (variant === 'pending') data[TODAY] = pending();
   if (variant === 'linkonly') data[TODAY] = linkOnly();
+  if (variant === 'weekend') data[TODAY] = { status: 'PENDING', date: TODAY, items: [], isMock: false, weekend: true, message: '오늘은 오하아사 운세가 공개되지 않았어요', comfort: env.call(`weekendComfort_('2026-10-17')`), note: '오하아사는 토·일요일에 쉬고, 월요일 아침에 새 운세로 돌아와요.', official: null, version: 'W' };
   return data;
 }
 
@@ -70,6 +71,7 @@ const SCENES = [
   { name: 'home-real', variant: 'real' },
   { name: 'home-pending', variant: 'pending' },
   { name: 'home-linkonly', variant: 'linkonly' },
+  { name: 'home-weekend', variant: 'weekend' },
   { name: 'ranking', variant: 'mock', after: `setTimeout(() => go('ranking'), 120);` },
   { name: 'ranking-real', variant: 'real', after: `setTimeout(() => go('ranking'), 120);` },
   { name: 'detail', variant: 'real', after: `setTimeout(() => go('detail', 'leo'), 120);` },

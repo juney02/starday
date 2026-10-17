@@ -23,10 +23,34 @@ const CONFIG = {
   ON_DEMAND_GAP_SEC: 600,
   // 공식 사이트에 아직 어제 운세가 남아 있을 때, 며칠 전 것까지 "그 날짜의 기록"으로 저장할지
   BACKFILL_DAYS: 3,
-  // 토·일요일(오하아사 방송 없음)에 별하루가 직접 만드는 운세의 출처 이름 (WeekendAi.gs)
-  AI_WEEKEND_SOURCE: '별하루 AI 주말 운세 (오하아사 아님)',
-  MSG_WEEKEND: '오하아사는 토·일요일에 방송이 없어요. 월요일 아침에 새 운세가 올라와요.',
+  // 토·일요일: 오하아사 방송이 없어서 운세가 공개되지 않는다 (운세를 대신 만들지 않는다)
+  MSG_WEEKEND: '오늘은 오하아사 운세가 공개되지 않았어요',
+  MSG_WEEKEND_NOTE: '오하아사는 토·일요일에 쉬고, 월요일 아침에 새 운세로 돌아와요.',
+  // 주말 안내에 곁들이는 위로 한마디 (운세가 아니라 응원 문구. 날짜마다 하나씩 돌아가며 보여준다)
+  WEEKEND_COMFORT: [
+    '오늘은 별들도 쉬어 가는 날이에요. 순위 걱정 없이 나를 위한 하루를 보내 보세요.',
+    '운세가 없는 날엔 내가 나의 1위예요. 오늘도 충분히 잘하고 있어요.',
+    '잠시 쉬어 가도 괜찮아요. 쉬는 시간도 다음 걸음을 위한 준비예요.',
+    '좋아하는 음악 한 곡, 따뜻한 차 한 잔으로 나에게 작은 선물을 해 보세요.',
+    '이번 주도 수고 많았어요. 오늘은 마음이 가는 대로 천천히 보내도 돼요.',
+    '별은 낮에도 그 자리에 있어요. 보이지 않아도 당신의 빛은 여전해요.',
+    '오늘 하루는 정답 없이 흘러가도 괜찮아요. 웃을 일이 하나쯤 찾아올 거예요.',
+  ],
 };
+
+/** 토·일요일인지 ('yyyy-MM-dd', 한국 날짜 기준) */
+function isWeekend_(date) {
+  const p = String(date).split('-').map(Number);
+  const day = new Date(Date.UTC(p[0], p[1] - 1, p[2])).getUTCDay();
+  return day === 0 || day === 6;
+}
+
+/** 날짜마다 정해진 위로 한마디 (같은 날은 같은 문구) */
+function weekendComfort_(date) {
+  const list = CONFIG.WEEKEND_COMFORT;
+  const n = String(date).replace(/-/g, '').split('').reduce(function (s, c) { return s + Number(c); }, 0) + Number(String(date).slice(-2));
+  return list[n % list.length];
+}
 
 // 12별자리의 고유 영문 식별자
 const ZODIAC_KEYS = [
@@ -49,7 +73,6 @@ const STATUS = {
  *  TEST_SCENARIO        TEST 모드 가상 게시물 시나리오 (normal, none, duplicate_rank, missing_sign, wrong_date, image_only)
  *  RETENTION_DAYS       운세 보관·표시 기간(일). 0이면 제한 없음 (기본 30)
  *  PROD_SOURCE          운영 모드 수집 경로: 'SITE'(공식 사이트 horoscope.json, 기본) | 'X'(X 공식 API)
- *  WEEKEND_AI           'false'가 아니면, 토·일요일에 AI가 만든 재미용 운세를 보여줌 (Gemini 키 필요, 기본 true)
  *  ON_DEMAND_FETCH      'false'가 아니면, 운영 모드에서 앱을 열었을 때 오늘 운세가 없으면 바로 공식 사이트를 확인 (기본 true)
  *  ※ 처음 설정은 편집기에서 setupRealApp() 하나만 실행하면 된다 (실제 운세 모드로 맞춤)
  *  OCR_ENABLED          'true'일 때만 이미지 분석 사용 (기본 false)

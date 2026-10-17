@@ -19,7 +19,7 @@ const AI_APP_HELP = {
   data: '운세는 일본 ABC TV "おはよう朝日です(오하아사)" 공식 사이트에 올라온 실제 순위를 가져와서 한국어로 번역해 보여줘요. 매일 아침 자동으로 확인하고, 앱을 열었을 때 아직 없으면 그 자리에서 다시 확인해요. 화면에 "테스트 운세"라고 보이면 개발 확인용 가상 데이터예요.',
   privacy: '생년월일과 태어난 시간은 이 기기의 브라우저에만 저장되고 서버로 보내지지 않아요. AI 도우미에는 내 별자리와 질문 내용만 전달돼요.',
   share: '운세 카드 공유(이미지 저장)는 아직 준비 중이에요.',
-  weekend: '오하아사는 토·일요일에 방송이 없어요. 그날은 별하루 AI가 직접 만든 재미용 "AI 주말 운세"를 보여줘요. 오하아사 공식 운세가 아니에요.',
+  weekend: '오하아사는 토·일요일에 방송이 없어서 그날은 운세가 공개되지 않아요. 별하루는 운세를 대신 만들지 않고, 월요일 아침에 새 운세가 올라오면 바로 보여줘요.',
   update: '운세는 보통 한국 시간 오전 8~9시 사이에 반영돼요. 새 운세가 올라오면 화면을 새로고침하지 않아도 자동으로 바뀌어요. 주말과 휴방일에는 새 운세가 없을 수 있어요.',
 };
 
@@ -52,7 +52,7 @@ function aiHoroscopeOf_(date, sign) {
   if (!it) return { available: false, date: date, reason: '이 별자리의 데이터가 없어요.' };
   return {
     available: true, date: date, sign: sign, sign_ko: ZODIAC_KO[sign], rank: it.rank, out_of: 12,
-    is_test_data: !!res.isMock, is_ai_weekend: !!res.isAi, content: it.content_ko || it.content_ja || '', lucky_item: it.lucky_item || '', lucky_color: it.lucky_color || '',
+    is_test_data: !!res.isMock, content: it.content_ko || it.content_ja || '', lucky_item: it.lucky_item || '', lucky_color: it.lucky_color || '',
     source: it.source_name || '', updated_at: res.updatedAt || '',
   };
 }
@@ -90,7 +90,7 @@ const AiTools = {
           const date = aiDate_(args.date, ctx.today);
           const res = HoroscopeService.getByDate(date);
           if (res.status !== 'MOCK' && res.status !== 'PUBLISHED') return { available: false, date: date, reason: res.message || res.status, official_link: res.official ? res.official.url : '', latest_available_date: res.latestDate || '' };
-          return { available: true, date: date, is_test_data: !!res.isMock, is_ai_weekend: !!res.isAi, ranking: res.items.map(function (i) { return { rank: i.rank, sign: i.zodiac_sign, sign_ko: ZODIAC_KO[i.zodiac_sign] }; }) };
+          return { available: true, date: date, is_test_data: !!res.isMock, ranking: res.items.map(function (i) { return { rank: i.rank, sign: i.zodiac_sign, sign_ko: ZODIAC_KO[i.zodiac_sign] }; }) };
         }
         case 'get_history': {
           const sign = aiSignKey_(args.sign, ctx.sign);
