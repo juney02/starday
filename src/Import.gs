@@ -70,7 +70,8 @@ const Importer = {
 
     // 이미 완전히 검증된 12건이 있으면 다시 저장하지 않는다
     const existing = HoroscopeRepo.rowsForDate(today, mode);
-    const complete = existing.length === 12 && existing.every(function (r) { return r.validation_status === 'VALID'; });
+    // (AI 주말 운세는 "완료"로 치지 않는다 → 공식 자료가 올라오면 공식 자료로 바뀐다)
+    const complete = existing.length === 12 && existing.every(function (r) { return r.validation_status === 'VALID' && r.source_name !== CONFIG.AI_WEEKEND_SOURCE; });
     if (complete && !opts.force) return { status: 'SKIPPED', message: '오늘 데이터가 이미 저장되어 있어요.' };
 
     return this.origin_(mode) === 'SITE'
@@ -247,7 +248,9 @@ const Importer = {
       };
       const ex = bySign[it.sign];
       if (ex) {
-        if (ex.publication_status === STATUS.PUBLISHED || String(ex.edited_by_admin) === 'true') { skipped++; return; }
+        // AI 주말 운세는 공식 자료가 오면 공식 자료로 바꾼다. 그 밖의 공개·수정된 행은 보호한다
+        const isAi = ex.source_name === CONFIG.AI_WEEKEND_SOURCE;
+        if (!isAi && (ex.publication_status === STATUS.PUBLISHED || String(ex.edited_by_admin) === 'true')) { skipped++; return; }
         Db.update(CONFIG.SHEET.HOROSCOPES, ex._row, row);
       } else {
         row.id = Utilities.getUuid(); row.created_at = now;
@@ -292,6 +295,8 @@ function tick() {
   props.getKeys().forEach(function (k) { if (/^SLOT_\d{4}-\d{2}-\d{2}_/.test(k) && k.indexOf('SLOT_' + now.date) !== 0) props.deleteProperty(k); });
 
   Importer.run('AUTO ' + due[due.length - 1], {});
+  // 토·일요일: 공식 운세가 없으면 AI 주말 운세를 미리 만들어 둔다
+  if (Settings.mode() === 'PRODUCTION' && WeekendAi.isWeekend(now.date)) { try { WeekendAi.ensure(now.date, 'AUTO'); } catch (e) { /* 무시 */ } }
 
   if (due.indexOf(CONFIG.FINAL_SLOT) >= 0) { try { Importer.purgeOld_(); } catch (e) { /* 무시 */ } }
 }

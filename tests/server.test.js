@@ -642,5 +642,88 @@ function xFeed(e, date, scenario) {
   // 소유자 전용 모델 조회
   const e3 = fresh(); e3.user.act = 'visitor@x.com'; ok(/소유자/.test((() => { try { e3.run('listGeminiModels()'); } catch (er) { return er.message; } })() || ''), '방문자는 모델 목록 조회 불가');
 }
+// ============================================================ 11. AI 주말 운세 (토·일요일)
+{
+  const KEY = 'AIza-WEEKEND-KEY';
+  const SIGNS = ['aries', 'taurus', 'gemini', 'cancer', 'leo', 'virgo', 'libra', 'scorpio', 'sagittarius', 'capricorn', 'aquarius', 'pisces'];
+  const official = (d) => [{ horoscope_id: '9', onair_date: d, open_st: '2', detail: SIGNS.map((_, k) => ({ ranking_no: String(k + 1), horoscope_st: ('0' + (k + 1)).slice(-2), horoscope_text: `公式${k + 1}\t\t\t自転車` })) }];
+  const aiJson = (n = 12, wrap = false) => {
+    const arr = SIGNS.slice(0, n).map(s => ({ sign: s, content: `${s} 오늘은 좋은 기운이 가득해. 산책을 해 봐.`, lucky_item: '머그컵', lucky_color: '하늘색' }));
+    const t = JSON.stringify(arr); return wrap ? '```json\n' + t + '\n```' : t;
+  };
+  const env = (opt = {}) => {
+    const e = makeEnv(); e.gem = [];
+    e.run(`Settings.set('MODE','PRODUCTION'); Settings.set('AUTO_PUBLISH','true'); Source.patch({authorization_status:'APPROVED'})`);
+    if (opt.key !== false) e.run(`Settings.set('GEMINI_API_KEY', ${j(KEY)})`);
+    let siteDate = opt.siteDate || '20261016';
+    e.setSite = d => { siteDate = d; };
+    e.fetchHandler = (url, o) => {
+      if (/horoscope\.json/.test(url)) return { code: 200, body: official(siteDate) };
+      if (/generativelanguage/.test(url)) { const b = JSON.parse(o.payload); e.gem.push({ url, headers: o.headers, body: b }); return { code: 200, body: { candidates: [{ content: { role: 'model', parts: [{ text: (opt.reply || (() => aiJson()))(e.gem.length) }] } }] } }; }
+      return { code: 404, body: '{}' };
+    };
+    return e;
+  };
+
+  // 11-1. 순위는 날짜로 정해짐 (12별자리, 1~12 중복 없음, 같은 날짜면 같은 순위)
+  let e = env();
+  const rk = e.call(`WeekendAi.ranking('2026-10-17')`);
+  ok(Object.keys(rk).length === 12 && new Set(Object.values(rk)).size === 12 && Object.values(rk).every(r => r >= 1 && r <= 12), '주말 순위: 12별자리·1~12위 중복 없음');
+  ok(JSON.stringify(e.call(`WeekendAi.ranking('2026-10-17')`)) === JSON.stringify(rk) && JSON.stringify(e.call(`WeekendAi.ranking('2026-10-18')`)) !== JSON.stringify(rk), '같은 날짜는 같은 순위, 날짜가 다르면 다른 순위');
+  ok(e.call(`WeekendAi.isWeekend('2026-10-17')`) && e.call(`WeekendAi.isWeekend('2026-10-18')`) && !e.call(`WeekendAi.isWeekend('2026-10-16')`), '토·일만 주말');
+
+  // 11-2. 토요일에 앱을 열면: 공식 사이트 확인 → 없음 → AI 주말 운세를 만들어 보여줌
+  e = env(); e.setNow('2026-10-17 10:00');
+  const r = e.call(`getHoroscopes()`);
+  ok(r.status === 'PUBLISHED' && r.isAi === true && r.isMock === false && r.items.length === 12 && r.official === null, '토요일: AI 주말 운세 표시(isAi, 공식 링크 없음)');
+  ok(r.items.every(i => i.rank === rk[i.zodiac_sign] && i.source_name === '별하루 AI 주말 운세 (오하아사 아님)' && i.content_ja === '' && i.content_ko.length > 10), '순위는 서버가 정한 값, 출처는 "오하아사 아님"으로 저장');
+  ok(e.gem.length === 1 && e.gem[0].headers['x-goog-api-key'] === KEY && e.gem[0].url.indexOf(KEY) < 0, 'AI는 한 번만 호출, 키는 헤더로');
+  const prompt = JSON.stringify(e.gem[0].body);
+  ok(/양자리/.test(prompt) && /JSON/.test(prompt) && /오하아사/.test(prompt) && !/생년월일/.test(prompt), 'AI 요청: 순위 목록·형식 지시 포함, 사용자 정보 없음');
+  e.call(`getHoroscopes()`); e.call(`getHoroscopes()`);
+  eq(e.gem.length, 1, '다시 열어도 새로 만들지 않음(하루 한 번, 모두 같은 결과)');
+  ok(e.call(`getHoroscopes('2026-10-16')`).isAi === false, '금요일 운세는 그대로 공식 자료');
+  ok(e.call(`Db.readAll('import_logs')`).some(l => /AI_WEEKEND/.test(l.trigger) && l.import_status === 'SUCCESS'), 'AI 주말 운세 생성 기록');
+
+  // 11-3. 코드 블록(```json)으로 감싸 와도 읽음
+  e = env({ reply: () => aiJson(12, true) }); e.setNow('2026-10-18 09:30');
+  ok(e.call(`getHoroscopes()`).isAi === true, '일요일: ```json 감싼 답도 처리');
+
+  // 11-4. AI 답이 이상하면(11개) 한 번 더 시도 → 그래도 이상하면 저장하지 않고 주말 안내
+  e = env({ reply: () => aiJson(11) }); e.setNow('2026-10-17 10:00');
+  const bad = e.call(`getHoroscopes()`);
+  ok(bad.status === 'PENDING' && bad.items.length === 0 && /토·일요일에 방송이 없어요/.test(bad.message) && bad.latestDate === '2026-10-16', '실패하면 아무것도 저장하지 않고 "주말 휴방" 안내 + 최근 운세 버튼');
+  ok(e.gem.length === 2 && e.call(`Db.readAll('daily_horoscopes').filter(x=>x.horoscope_date==='2026-10-17').length`) === 0, '형식 오류는 2번까지만 시도, 부분 저장 없음');
+  e.call(`getHoroscopes()`); eq(e.gem.length, 2, '실패 후 10분 동안은 다시 부르지 않음');
+  ok(e.call(`Db.readAll('import_logs')`).some(l => l.import_status === 'FAILED' && /AI 주말 운세 실패/.test(l.error_message) && l.error_message.indexOf(KEY) < 0), '실패 기록(키 노출 없음)');
+
+  // 11-5. AI 키가 없으면 만들지 않고 안내만
+  e = env({ key: false }); e.setNow('2026-10-17 10:00');
+  const nk = e.call(`getHoroscopes()`);
+  ok(nk.status === 'PENDING' && /토·일요일/.test(nk.message) && e.gem.length === 0, 'AI 키가 없으면 주말 휴방 안내');
+
+  // 11-6. 평일에는 공식 운세가 없어도 AI로 채우지 않음
+  e = env({ siteDate: '20261015' }); e.setNow('2026-10-16 10:00');
+  const wd = e.call(`getHoroscopes()`);
+  ok(wd.status === 'PENDING' && e.gem.length === 0, '평일에는 AI 운세를 만들지 않음');
+  // 지난 주말 날짜도 AI로 새로 만들지 않음
+  e = env(); e.setNow('2026-10-19 10:00'); e.setSite('20261019'); e.call(`getHoroscopes('2026-10-18')`);
+  eq(e.gem.length, 0, '지난 날짜는 AI로 채우지 않음');
+
+  // 11-7. 토요일 아침 자동 확인(tick)이 AI 운세를 미리 만듦 → 공식 자료가 오면 공식으로 바뀜
+  e = env(); e.setNow('2026-10-17 08:00'); e.run('tick()');
+  ok(e.call(`HoroscopeRepo.rowsForDate('2026-10-17','PRODUCTION')`).length === 12 && e.gem.length === 1, '토요일 08:00 자동 확인 때 AI 운세를 미리 만듦');
+  e.setSite('20261017'); e.setNow('2026-10-17 08:10'); e.run('tick()');
+  const after = e.call(`getHoroscopes()`);
+  ok(after.isAi === false && after.items.length === 12 && after.items.every(i => /公式/.test(i.content_ja)), '공식 자료가 올라오면 AI 운세 대신 공식 운세');
+  eq(e.gem.length, 1, '공식 자료로 바뀐 뒤에는 AI를 부르지 않음');
+
+  // 11-8. AI 도우미 도구: AI 주말 운세라는 표시가 전달됨
+  e = env(); e.setNow('2026-10-17 10:00'); e.call(`getHoroscopes()`);
+  ok(e.call(`AiTools.run('get_horoscope', {sign:'leo'}, {sign:null, today:'2026-10-17'})`).is_ai_weekend === true, 'AI 도우미 도구: is_ai_weekend 표시');
+  e.run(`Settings.set('WEEKEND_AI','false')`); e.setNow('2026-10-18 10:00'); e.call(`getHoroscopes()`);
+  eq(e.gem.length, 1, 'WEEKEND_AI=false면 만들지 않음');
+}
+
 console.log(`\n통과 ${passes} / 실패 ${fails}`);
 process.exit(fails ? 1 : 0);

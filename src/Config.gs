@@ -23,6 +23,9 @@ const CONFIG = {
   ON_DEMAND_GAP_SEC: 600,
   // 공식 사이트에 아직 어제 운세가 남아 있을 때, 며칠 전 것까지 "그 날짜의 기록"으로 저장할지
   BACKFILL_DAYS: 3,
+  // 토·일요일(오하아사 방송 없음)에 별하루가 직접 만드는 운세의 출처 이름 (WeekendAi.gs)
+  AI_WEEKEND_SOURCE: '별하루 AI 주말 운세 (오하아사 아님)',
+  MSG_WEEKEND: '오하아사는 토·일요일에 방송이 없어요. 월요일 아침에 새 운세가 올라와요.',
 };
 
 // 12별자리의 고유 영문 식별자
@@ -46,6 +49,7 @@ const STATUS = {
  *  TEST_SCENARIO        TEST 모드 가상 게시물 시나리오 (normal, none, duplicate_rank, missing_sign, wrong_date, image_only)
  *  RETENTION_DAYS       운세 보관·표시 기간(일). 0이면 제한 없음 (기본 30)
  *  PROD_SOURCE          운영 모드 수집 경로: 'SITE'(공식 사이트 horoscope.json, 기본) | 'X'(X 공식 API)
+ *  WEEKEND_AI           'false'가 아니면, 토·일요일에 AI가 만든 재미용 운세를 보여줌 (Gemini 키 필요, 기본 true)
  *  ON_DEMAND_FETCH      'false'가 아니면, 운영 모드에서 앱을 열었을 때 오늘 운세가 없으면 바로 공식 사이트를 확인 (기본 true)
  *  ※ 처음 설정은 편집기에서 setupRealApp() 하나만 실행하면 된다 (실제 운세 모드로 맞춤)
  *  OCR_ENABLED          'true'일 때만 이미지 분석 사용 (기본 false)

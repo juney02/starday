@@ -95,8 +95,16 @@ const HoroscopeService = {
       const fresh = HoroscopeRepo.rowsForDate(date, mode).filter(function (r) { return r.publication_status === STATUS.PUBLISHED; });
       if (HoroscopeRepo.isComplete(fresh)) return this.pack_('PUBLISHED', date, fresh, false, HoroscopeRepo.officialPost(date, mode));
     }
+    // 토·일요일: 오하아사 방송이 없으니 별하루 AI 주말 운세를 만든다 (AI가 만든 것이라고 화면에 표시)
+    if (WeekendAi.applies(date, now) && WeekendAi.ensure(date, 'ON_DEMAND')) {
+      const ai = HoroscopeRepo.rowsForDate(date, mode).filter(function (r) { return r.publication_status === STATUS.PUBLISHED; });
+      if (HoroscopeRepo.isComplete(ai)) return this.pack_('PUBLISHED', date, ai, false, null);
+    }
     const res = this.pending_(date, now, HoroscopeRepo.officialPost(date, mode));
-    if (res.status === 'PENDING') res.latestDate = this.latestPublishedBefore_(date, mode);
+    if (res.status === 'PENDING') {
+      res.latestDate = this.latestPublishedBefore_(date, mode);
+      if (WeekendAi.isWeekend(date)) res.message = CONFIG.MSG_WEEKEND;
+    }
     return res;
   },
 
@@ -122,7 +130,8 @@ const HoroscopeService = {
       };
     }).sort(function (a, b) { return a.rank - b.rank; });
     const updatedAt = rows.reduce(function (m, r) { return r.updated_at > m ? r.updated_at : m; }, '');
-    return { status: status, date: date, isMock: isMock, message: '', updatedAt: updatedAt, version: status + '|' + updatedAt, items: items, official: official };
+    const isAi = rows.length > 0 && rows.every(function (r) { return r.source_name === CONFIG.AI_WEEKEND_SOURCE; });
+    return { status: status, date: date, isMock: isMock, isAi: isAi, message: '', updatedAt: updatedAt, version: status + '|' + updatedAt, items: items, official: isAi ? null : official };
   },
 
   /** 저장된 테스트 데이터가 없을 때 즉석으로 만드는 가상 운세 (TEST_FALLBACK) */

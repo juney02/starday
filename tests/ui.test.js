@@ -54,6 +54,25 @@ const TOKEN = 'tok-admin-xyz';
     ok(!p.errors.length, '화면 오류 없음: ' + p.errors.join(' | '));
   }
 
+  // ================= 0-2. 토요일: AI 주말 운세는 "AI가 만든 재미용(오하아사 아님)"으로 분명히 표시
+  {
+    const env = makeEnv();
+    const S = ['aries', 'taurus', 'gemini', 'cancer', 'leo', 'virgo', 'libra', 'scorpio', 'sagittarius', 'capricorn', 'aquarius', 'pisces'];
+    env.fetchHandler = (url) => {
+      if (/horoscope\.json/.test(url)) return { code: 200, body: [{ horoscope_id: '1', onair_date: '20261016', open_st: '2', detail: S.map((_, k) => ({ ranking_no: String(k + 1), horoscope_st: ('0' + (k + 1)).slice(-2), horoscope_text: `本文${k + 1}\t\t\t自転車` })) }] };
+      if (/generativelanguage/.test(url)) return { code: 200, body: { candidates: [{ content: { parts: [{ text: JSON.stringify(S.map(s => ({ sign: s, content: '주말엔 마음 가는 대로 쉬어 봐. 좋아하는 음악을 틀어 줘.', lucky_item: '머그컵', lucky_color: '하늘색' }))) }] } }] } };
+      return { code: 404, body: '{}' };
+    };
+    env.setNow('2026-10-17 10:00'); env.run('setupRealApp()'); env.run(`Settings.set('GEMINI_API_KEY','AIza-UI')`);
+    const p = openPage(env, 'Index', { profile: PROFILE });
+    await wait(80);
+    ok(/AI 주말 운세/.test(p.text()) && /오하아사가 쉬는 날/.test(p.text()) && /오하아사 아님/.test(p.text()), '토요일: AI 주말 운세 배너·캡션 표시');
+    ok(/\d+위 \/ 12위/.test(p.text()) && /머그컵/.test(p.text()) && !p.text().includes('테스트 운세'), '토요일: 순위·행운 아이템 표시(테스트 운세 아님)');
+    ok(!p.q('[data-action=toggle-ja]') && !p.qa('a').some(a => /공식/.test(a.textContent)), 'AI 운세에는 일본어 원문 버튼·공식 링크가 없음');
+    ok(/별하루 AI가 순위와 문구를 직접 만들었어요/.test(p.text()), '출처 설명 문구');
+    ok(!p.errors.length, '화면 오류 없음: ' + p.errors.join(' | '));
+  }
+
   // ================= A. 사용자 앱 (TEST 모드, 저장된 데이터가 아직 없을 때: 대기 → 자동 갱신)
   {
     const env = makeEnv();

@@ -111,6 +111,7 @@ function pollTick() {
 const stateCard = o => `<section class="state" role="status"><div class="ico">${icon(o.icon)}</div><h2>${esc(o.title)}</h2>${o.text ? `<p>${esc(o.text)}</p>` : ''}${o.actions || ''}</section>`;
 const loadingHtml = () => `<div role="status" aria-label="운세를 불러오는 중"><div class="skeleton sk-hero"></div><div class="skeleton sk-card"></div><div class="skeleton sk-line" style="width:60%"></div><p class="sr-only">별의 소식을 불러오는 중…</p></div>`;
 const mockBanner = () => `<div class="pill mock-banner" role="note">${icon('info', 'sm')}<span><b>테스트 운세</b> · 가상 데이터예요</span></div>`;
+const aiBanner = () => `<div class="pill mock-banner" role="note">${icon('sparkles', 'sm')}<span><b>AI 주말 운세</b> · 오하아사가 쉬는 날 별하루 AI가 만든 재미용 운세예요</span></div>`;
 const officialLink = (url, label) => `<a class="link-btn" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)} ${icon('external', 'sm')}</a>`;
 
 /* 데이터 상태(로딩/오류/미등록/링크만)에 맞는 화면을 대신 보여주고, 정상일 때만 content를 그린다 */
@@ -120,7 +121,7 @@ function dataBlock(view, content, retryAction) {
     return stateCard({ icon: 'moon', title: '운세를 불러오지 못했어요', text: view.error, actions: `<button class="btn" data-action="${retryAction}">다시 시도</button>` });
   }
   const d = view.data;
-  if (d.status === 'MOCK' || d.status === 'PUBLISHED') return (d.isMock ? mockBanner() : '') + content(d.items, d);
+  if (d.status === 'MOCK' || d.status === 'PUBLISHED') return (d.isMock ? mockBanner() : '') + (d.isAi ? aiBanner() : '') + content(d.items, d);
   if (d.status === 'LINK_ONLY') {
     return stateCard({
       icon: 'link', title: '공식 게시물로 확인해 주세요', text: d.message + (d.official && d.official.publishedAt ? ' (게시 시각 ' + d.official.publishedAt + ')' : ''),
@@ -154,7 +155,7 @@ function heroHtml(z, it, d, isMine) {
   const rank = Number(it.rank), f = splitFortune(it);
   return `<section class="hero" aria-labelledby="heroName">
     <div class="hero-sign"><span class="sym" aria-hidden="true">${z.sym}</span><h2 id="heroName">${z.ko}</h2>${isMine ? '<span class="badge-my">MY</span>' : ''}</div>
-    <p class="hero-cap">${d.isMock ? '별자리 운세 (테스트)' : '별자리 운세'}</p>
+    <p class="hero-cap">${d.isMock ? '별자리 운세 (테스트)' : (d.isAi ? 'AI 주말 운세 (오하아사 아님)' : '별자리 운세')}</p>
     <div class="rank-emblem" role="img" aria-label="${z.ko} ${rank}위, 12개 별자리 중">${rankHtml(rank, 'rank-pop')}</div>
     ${f.headline ? `<p class="headline">${esc(f.headline)}</p>` : ''}
   </section>`;
@@ -180,6 +181,12 @@ function tilesHtml(it, d) {
   return `<div class="tiles">${t.map(x => `<div class="tile"><span class="ico">${icon(x[0])}</span><span><span class="lbl">${x[1]}</span><span class="v">${esc(x[2])}</span></span></div>`).join('')}</div>`;
 }
 function metaHtml(it, d) {
+  if (d.isAi) {                           // AI 주말 운세: 공식 링크 대신 "AI가 만든 것"이라는 설명
+    return `<section aria-label="출처와 갱신 정보"><dl class="meta-list">
+      <div><dt>데이터 출처</dt><dd>${esc(it.source_name || '별하루 AI 주말 운세')}</dd></div>
+      <div><dt>기준 날짜</dt><dd>${esc(formatDateKo(d.date))}</dd></div>
+      </dl><p class="note" style="margin-top:var(--s2)">오하아사는 토·일요일에 방송이 없어서, 별하루 AI가 순위와 문구를 직접 만들었어요. 재미로만 봐 주세요. 월요일부터는 다시 오하아사 공식 운세가 나와요.</p></section>`;
+  }
   const url = it.source_url || (d.official && d.official.url) || OFFICIAL_X_URL;
   const label = /x\.com|twitter\.com/.test(url) ? '공식 X 게시물 보기' : '공식 페이지에서 보기';
   const upd = d.updatedAt ? String(d.updatedAt).slice(0, 16) : '-';
@@ -197,7 +204,7 @@ function fortuneView(key, items, isMine, d, opts) {
   const z = zodiacByKey(key);
   const it = items.find(x => x.zodiac_sign === key);
   if (!it) return stateCard({ icon: 'moon', title: '이 별자리의 운세가 아직 없어요' });
-  const jaBtn = `<button class="btn btn-secondary" data-action="toggle-ja" aria-expanded="${App.showJa}">${App.showJa ? '일본어 원문 숨기기' : '일본어 원문 보기'}</button>`;
+  const jaBtn = d.isAi ? '' : `<button class="btn btn-secondary" data-action="toggle-ja" aria-expanded="${App.showJa}">${App.showJa ? '일본어 원문 숨기기' : '일본어 원문 보기'}</button>`;   // AI 주말 운세에는 일본어 원문이 없다
 
   if (opts.compact) {                      // 기록 화면: 간결한 요약 카드
     const f = splitFortune(it);
@@ -220,6 +227,7 @@ function fortuneView(key, items, isMine, d, opts) {
   </div>`;
 }
 function metaLinkBtn(it, d) {
+  if (d.isAi) return '';
   const url = it.source_url || (d.official && d.official.url) || OFFICIAL_X_URL;
   const label = /x\.com|twitter\.com/.test(url) ? '공식 X 게시물 보기' : '공식 페이지에서 보기';
   return `<a class="btn btn-secondary" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
@@ -496,7 +504,7 @@ const PAGES = {
       return `<div class="stack-lg">
         <div class="story" role="img" aria-label="공유 카드 미리보기: ${z.ko} 오늘 ${rank}위">
           <div class="story-top"><span class="logo">${LOGO_SVG}<span>별하루</span></span><span class="story-date">${esc(d.date.replace(/-/g, '.'))}</span></div>
-          ${d.isMock ? '<span class="story-test">테스트 운세</span>' : ''}
+          ${d.isMock ? '<span class="story-test">테스트 운세</span>' : ''}${d.isAi ? '<span class="story-test">AI 주말 운세 · 오하아사 아님</span>' : ''}
           <div class="story-mid"><span class="sym" aria-hidden="true">${z.sym}</span><div class="nm">${z.ko}</div>
             <div class="rank-emblem"><div class="rank"><span class="rank-num">${rank}</span><span class="rank-unit">위</span></div></div></div>
           <p class="story-tag">매일 아침 나의 별을 만나는 시간</p>
@@ -527,7 +535,7 @@ const PAGES = {
     if (!z) return PAGES.onboarding();
     const p = App.profile, f = App.form;
     const birth = p.birthDate ? p.birthDate.replace(/-/g, '.') + (p.birthTime ? ' · ' + fmtTime('2000-01-01 ' + p.birthTime) : '') : '생년월일을 입력하지 않았어요';
-    const dataKind = App.data && App.data.isMock ? '테스트(가상) 데이터' : (App.data && App.data.status === 'PUBLISHED' ? '공식 자료 기반' : '확인 중');
+    const dataKind = App.data && App.data.isMock ? '테스트(가상) 데이터' : (App.data && App.data.isAi ? 'AI 주말 운세(오하아사 아님)' : (App.data && App.data.status === 'PUBLISHED' ? '공식 자료 기반' : '확인 중'));
     return `<header class="page-head"><h1>마이페이지</h1></header>
       <section class="card profile" aria-label="내 프로필"><span class="ring" aria-hidden="true"><span class="sym">${z.sym}</span></span>
         <div><div class="eyebrow">나의 별자리</div><div class="who">${z.ko}</div><div class="faint" style="font-size:var(--fs-sub)">${esc(birth)}</div></div></section>
