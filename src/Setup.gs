@@ -52,7 +52,7 @@ function applyRealSettings_() {
   Settings.set('ON_DEMAND_FETCH', 'true');            // 앱을 열었을 때 오늘 운세가 없으면 바로 확인
   Source.patch({
     enabled: 'true', authorization_status: 'APPROVED',
-    notes: '개인 열람 전용(웹앱 접근: 나만). APPROVED = 내 화면에 표시한다는 뜻. 공개 배포 전에는 ABC TV 이용 허락 필요.',
+    notes: '2026-10-17 소유자 결정: 링크가 있는 누구나 볼 수 있게 공개(ABC TV 이용 허락은 미확인, 위험을 알고 선택). 허락 문제가 생기면 LINK_ONLY로 바꿀 것.',
   });
   if (!Settings.has('ADMIN_TOKEN')) Settings.set('ADMIN_TOKEN', (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, ''));
   HoroscopeRepo.invalidate(nowParts_().date);
